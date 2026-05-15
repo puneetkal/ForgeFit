@@ -1,4 +1,5 @@
 //Coach.tsx — updated food system: per-serving instead of per-100g
+// + Copy Plan feature: copy diet/workout from any planned date
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
@@ -22,9 +23,9 @@ interface ClientRow {
 interface Food {
   id: string;
   name: string;
-  serving_size: number; // e.g. 1, 15, 100, 240
-  serving_unit: string; // e.g. "unit", "tbsp", "g", "ml", "egg", "banana"
-  calories_per_serving: number; // kcal for exactly serving_size × serving_unit
+  serving_size: number;
+  serving_unit: string;
+  calories_per_serving: number;
   protein_per_serving: number;
   carbs_per_serving: number;
   fat_per_serving: number;
@@ -75,7 +76,6 @@ function pctColor(v: number) {
 }
 
 // ── Serving unit helpers ───────────────────────────────────────────────────────
-// Common serving unit suggestions shown as quick-pick chips
 const SERVING_UNIT_SUGGESTIONS = [
   "g",
   "ml",
@@ -90,13 +90,11 @@ const SERVING_UNIT_SUGGESTIONS = [
   "roti",
 ];
 
-// Display label for a food's serving e.g. "1 egg", "15 ml", "100 g"
 function servingLabel(food: Food): string {
   const sz = food.serving_size === 1 ? "" : `${food.serving_size} `;
   return `${sz}${food.serving_unit}`;
 }
 
-// Macro string for display in table / form previews
 function macroSummary(food: Food, qty = 1): string {
   const scale = qty;
   return [
@@ -445,8 +443,6 @@ function MiniCalendar({
 }
 
 // ── Add Food Modal ─────────────────────────────────────────────────────────────
-// Completely redesigned for per-serving entry
-
 interface NewFoodState {
   name: string;
   serving_size: string;
@@ -482,7 +478,6 @@ function AddFoodModal({
     setForm((p) => ({ ...p, [k]: v }));
   }
 
-  // Live preview of macros for the defined serving
   const previewCal = parseFloat(form.calories_per_serving) || 0;
   const previewP = parseFloat(form.protein_per_serving) || 0;
   const previewC = parseFloat(form.carbs_per_serving) || 0;
@@ -509,7 +504,6 @@ function AddFoodModal({
           onSubmit={handleSave}
           style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
         >
-          {/* Food name */}
           <div>
             <label className="label">Food Name</label>
             <input
@@ -520,8 +514,6 @@ function AddFoodModal({
               onChange={(e) => set("name", e.target.value)}
             />
           </div>
-
-          {/* Serving definition */}
           <div>
             <label className="label">Serving Size</label>
             <div
@@ -599,8 +591,6 @@ function AddFoodModal({
                 )}
               </div>
             </div>
-
-            {/* Unit quick-pick chips */}
             {!customUnit && (
               <div
                 style={{
@@ -652,7 +642,6 @@ function AddFoodModal({
                 </button>
               </div>
             )}
-
             <div
               style={{
                 marginTop: "0.5rem",
@@ -668,8 +657,6 @@ function AddFoodModal({
               size=1 unit=tbsp, calories=94.
             </div>
           </div>
-
-          {/* Macro inputs */}
           <div>
             <label className="label">
               Macros for 1 serving ({servingDisplay || "serving"})
@@ -723,8 +710,6 @@ function AddFoodModal({
               ))}
             </div>
           </div>
-
-          {/* Live preview */}
           {previewCal > 0 && (
             <div
               style={{
@@ -746,7 +731,6 @@ function AddFoodModal({
               <span style={{ color: "var(--accent2)" }}>F {previewF}g</span>
             </div>
           )}
-
           <div
             style={{
               display: "flex",
@@ -762,6 +746,211 @@ function AddFoodModal({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Copy Plan Modal ────────────────────────────────────────────────────────────
+// Lets the coach pick any date that already has a plan and copy it to the current date.
+
+type CopyPlanType = "diet" | "workout";
+
+function CopyPlanModal({
+  type,
+  planDates,
+  currentDate,
+  onClose,
+  onCopy,
+}: {
+  type: CopyPlanType;
+  planDates: Set<string>;
+  currentDate: string;
+  onClose: () => void;
+  onCopy: (fromDate: string) => Promise<void>;
+}) {
+  // Only show dates that have a plan and are not the current date
+  const availableDates = Array.from(planDates)
+    .filter((d) => d !== currentDate)
+    .sort((a, b) => b.localeCompare(a)); // newest first
+
+  const [selected, setSelected] = useState<string>(availableDates[0] || "");
+  const [copying, setCopying] = useState(false);
+
+  async function handleCopy() {
+    if (!selected) return;
+    setCopying(true);
+    await onCopy(selected);
+    setCopying(false);
+  }
+
+  const typeLabel = type === "diet" ? "Diet" : "Workout";
+  const typeEmoji = type === "diet" ? "🥗" : "🏋️";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 420, width: "95vw" }}
+      >
+        <div className="modal-title">
+          {typeEmoji} Copy {typeLabel} Plan
+        </div>
+
+        <p
+          style={{
+            color: "var(--muted)",
+            fontSize: 14,
+            marginBottom: "1.25rem",
+            marginTop: 0,
+          }}
+        >
+          Select a date to copy the {typeLabel.toLowerCase()} plan{" "}
+          <strong style={{ color: "var(--text)" }}>from</strong>. It will
+          replace the current plan for{" "}
+          <strong style={{ color: "var(--accent)" }}>
+            {new Date(currentDate + "T00:00:00").toLocaleDateString("en-GB", {
+              weekday: "short",
+              day: "numeric",
+              month: "short",
+            })}
+          </strong>
+          .
+        </p>
+
+        {availableDates.length === 0 ? (
+          <div
+            style={{
+              background: "var(--surface2)",
+              borderRadius: 10,
+              padding: "1.5rem",
+              textAlign: "center",
+              color: "var(--muted)",
+              fontSize: 14,
+              marginBottom: "1rem",
+            }}
+          >
+            No other planned dates found. Create plans on other dates first.
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              maxHeight: 280,
+              overflowY: "auto",
+              marginBottom: "1.25rem",
+            }}
+          >
+            {availableDates.map((date) => {
+              const display = new Date(date + "T00:00:00").toLocaleDateString(
+                "en-GB",
+                {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }
+              );
+              const isSelected = date === selected;
+              return (
+                <button
+                  key={date}
+                  onClick={() => setSelected(date)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    padding: "0.65rem 0.9rem",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    border: isSelected
+                      ? "2px solid var(--accent)"
+                      : "1px solid var(--border)",
+                    background: isSelected
+                      ? "rgba(124,106,247,0.1)"
+                      : "var(--surface2)",
+                    color: "inherit",
+                    textAlign: "left",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      border: isSelected
+                        ? "5px solid var(--accent)"
+                        : "2px solid var(--border)",
+                      background: isSelected ? "var(--accent)" : "transparent",
+                      transition: "all 0.15s",
+                    }}
+                  />
+                  <div>
+                    <div
+                      style={{
+                        fontWeight: isSelected ? 700 : 400,
+                        fontSize: 14,
+                      }}
+                    >
+                      {display}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--muted)",
+                        marginTop: 1,
+                      }}
+                    >
+                      {date}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Warning */}
+        {availableDates.length > 0 && (
+          <div
+            style={{
+              background: "rgba(248,113,113,0.08)",
+              border: "1px solid rgba(248,113,113,0.2)",
+              borderRadius: 8,
+              padding: "0.6rem 0.9rem",
+              fontSize: 12,
+              color: "#f87171",
+              marginBottom: "1.25rem",
+            }}
+          >
+            ⚠️ This will overwrite the existing {typeLabel.toLowerCase()} plan
+            for the selected date.
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: "0.75rem",
+            justifyContent: "flex-end",
+          }}
+        >
+          <button className="btn btn-outline" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleCopy}
+            disabled={copying || !selected || availableDates.length === 0}
+          >
+            {copying ? "Copying…" : `Copy ${typeLabel} Plan`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -802,6 +991,9 @@ export default function Coach() {
 
   const [showAddFood, setShowAddFood] = useState(false);
   const [foodSearch, setFoodSearch] = useState("");
+
+  // ── Copy Plan state ──────────────────────────────────────────────────────────
+  const [showCopyModal, setShowCopyModal] = useState<CopyPlanType | null>(null);
 
   useEffect(() => {
     if (!coachId) {
@@ -1066,6 +1258,91 @@ export default function Coach() {
     setSavingWorkout(false);
   }
 
+  // ── COPY DIET PLAN ───────────────────────────────────────────────────────────
+  // Fetches the diet plan from `fromDate` and loads it into local state (doesn't auto-save)
+  async function handleCopyDietPlan(fromDate: string) {
+    if (!selectedClient) return;
+    const { data: pd } = await supabase
+      .from("plan_days")
+      .select("*, meals(*, meal_items(*, foods(*)))")
+      .eq("client_id", selectedClient.id)
+      .eq("plan_date", fromDate)
+      .maybeSingle();
+
+    if (!pd) {
+      setError("No diet plan found for that date.");
+      setShowCopyModal(null);
+      return;
+    }
+
+    setDietNote(pd.diet_note || "");
+    const sm = [...(pd.meals || [])].sort(
+      (a: any, b: any) => a.display_order - b.display_order
+    );
+    setMeals(
+      sm.map((m: any) => ({
+        meal_name: m.meal_name,
+        items: (m.meal_items || []).map((i: any) => ({
+          food_id: i.food_id,
+          quantity: i.quantity,
+          unit: i.unit,
+          food: i.foods,
+        })),
+      }))
+    );
+
+    setShowCopyModal(null);
+    flash(
+      `✓ Diet plan copied from ${new Date(
+        fromDate + "T00:00:00"
+      ).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+      })} — remember to save!`
+    );
+  }
+
+  // ── COPY WORKOUT PLAN ────────────────────────────────────────────────────────
+  // Fetches the workout plan from `fromDate` and loads it into local state (doesn't auto-save)
+  async function handleCopyWorkoutPlan(fromDate: string) {
+    if (!selectedClient) return;
+    const { data: wpd } = await supabase
+      .from("workout_plan_days")
+      .select("*, workout_day_items(*, exercises(*))")
+      .eq("client_id", selectedClient.id)
+      .eq("plan_date", fromDate)
+      .maybeSingle();
+
+    if (!wpd) {
+      setError("No workout plan found for that date.");
+      setShowCopyModal(null);
+      return;
+    }
+
+    const sw = [...(wpd.workout_day_items || [])].sort(
+      (a: any, b: any) => a.display_order - b.display_order
+    );
+    setWorkoutItems(
+      sw.map((i: any) => ({
+        exercise_id: i.exercise_id,
+        sets: i.sets,
+        reps: i.reps,
+        weight_kg: i.weight_kg,
+        exercise: i.exercises,
+      }))
+    );
+
+    setShowCopyModal(null);
+    flash(
+      `✓ Workout plan copied from ${new Date(
+        fromDate + "T00:00:00"
+      ).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+      })} — remember to save!`
+    );
+  }
+
   // ── UPDATED: addFood uses per-serving fields ─────────────────────────────────
   async function handleAddFood(form: NewFoodState) {
     const { data, error: fe } = await supabase
@@ -1128,7 +1405,6 @@ export default function Coach() {
   function addMealItem(mi: number) {
     if (!foods.length) return;
     const f = foods[0];
-    // quantity defaults to 1 serving; unit comes from the food's serving_unit
     setMeals((prev) =>
       prev.map((m, i) =>
         i !== mi
@@ -1151,7 +1427,6 @@ export default function Coach() {
           if (j !== ii) return it;
           if (field === "food_id") {
             const f = foods.find((x) => x.id === value);
-            // When food changes, reset unit to that food's serving_unit and quantity to 1
             return {
               ...it,
               food_id: value,
@@ -1237,7 +1512,6 @@ export default function Coach() {
       )
     : 0;
   const latestWeight = clientProgress.find((p) => p.weight_kg)?.weight_kg;
-
   const filteredFoods = foods.filter(
     (f) =>
       !foodSearch || f.name.toLowerCase().includes(foodSearch.toLowerCase())
@@ -1593,6 +1867,36 @@ export default function Coach() {
             ) : planTab === "diet" ? (
               // ── DIET BUILDER ──────────────────────────────────────────────────
               <>
+                {/* Copy Diet Plan banner */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    background: "var(--surface2)",
+                    borderRadius: 10,
+                    padding: "0.6rem 0.9rem",
+                    marginBottom: "1rem",
+                    gap: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                    📋{" "}
+                    <span style={{ color: "var(--text)" }}>
+                      Reuse a plan from another day?
+                    </span>
+                  </div>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setShowCopyModal("diet")}
+                    disabled={planDates.size === 0}
+                    style={{ flexShrink: 0 }}
+                  >
+                    Copy Diet Plan
+                  </button>
+                </div>
+
                 <div style={{ marginBottom: "1rem" }}>
                   <label className="label">Day Note (optional)</label>
                   <input
@@ -1618,7 +1922,6 @@ export default function Coach() {
                 )}
 
                 {meals.map((meal, mi) => {
-                  // Meal totals
                   const totalCal = meal.items.reduce(
                     (s, it) =>
                       s +
@@ -1655,7 +1958,6 @@ export default function Coach() {
                         overflow: "hidden",
                       }}
                     >
-                      {/* Meal header */}
                       <div
                         style={{
                           display: "flex",
@@ -1705,8 +2007,6 @@ export default function Coach() {
                           Remove
                         </button>
                       </div>
-
-                      {/* Meal macro summary */}
                       {meal.items.length > 0 && (
                         <div
                           style={{
@@ -1735,8 +2035,6 @@ export default function Coach() {
                           </span>
                         </div>
                       )}
-
-                      {/* Food items */}
                       <div style={{ padding: "0.5rem 0.9rem" }}>
                         {meal.items.length === 0 && (
                           <p
@@ -1749,7 +2047,6 @@ export default function Coach() {
                             No foods yet.
                           </p>
                         )}
-
                         {meal.items.map((item, ii) => {
                           const food = item.food;
                           const itemCal = food
@@ -1767,7 +2064,6 @@ export default function Coach() {
                                 marginBottom: "0.5rem",
                               }}
                             >
-                              {/* Row 1: food picker + qty + remove */}
                               <div
                                 style={{
                                   display: "grid",
@@ -1795,8 +2091,6 @@ export default function Coach() {
                                     </option>
                                   ))}
                                 </select>
-
-                                {/* Quantity input — labelled with the food's serving unit */}
                                 <div
                                   style={{
                                     display: "flex",
@@ -1834,7 +2128,6 @@ export default function Coach() {
                                     {item.unit || food?.serving_unit || ""}
                                   </span>
                                 </div>
-
                                 <button
                                   onClick={() => removeMealItem(mi, ii)}
                                   style={{
@@ -1851,8 +2144,6 @@ export default function Coach() {
                                   ✕
                                 </button>
                               </div>
-
-                              {/* Row 2: macro info */}
                               {food && (
                                 <div
                                   style={{
@@ -1886,7 +2177,6 @@ export default function Coach() {
                             </div>
                           );
                         })}
-
                         <button
                           className="btn btn-outline btn-sm"
                           style={{ marginTop: "0.25rem" }}
@@ -1899,7 +2189,6 @@ export default function Coach() {
                   );
                 })}
 
-                {/* Day total */}
                 {meals.length > 0 &&
                   (() => {
                     const allItems = meals.flatMap((m) => m.items);
@@ -1988,6 +2277,36 @@ export default function Coach() {
             ) : planTab === "workout" ? (
               // ── WORKOUT BUILDER ───────────────────────────────────────────────
               <>
+                {/* Copy Workout Plan banner */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    background: "var(--surface2)",
+                    borderRadius: 10,
+                    padding: "0.6rem 0.9rem",
+                    marginBottom: "1rem",
+                    gap: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                    📋{" "}
+                    <span style={{ color: "var(--text)" }}>
+                      Reuse a plan from another day?
+                    </span>
+                  </div>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setShowCopyModal("workout")}
+                    disabled={planDates.size === 0}
+                    style={{ flexShrink: 0 }}
+                  >
+                    Copy Workout Plan
+                  </button>
+                </div>
+
                 {workoutItems.length === 0 && (
                   <div
                     className="card"
@@ -2360,8 +2679,6 @@ export default function Coach() {
                 + Add Food
               </button>
             </div>
-
-            {/* Search */}
             <div style={{ marginBottom: "1rem" }}>
               <input
                 className="input"
@@ -2370,7 +2687,6 @@ export default function Coach() {
                 onChange={(e) => setFoodSearch(e.target.value)}
               />
             </div>
-
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
               <table className="table">
                 <thead>
@@ -2387,7 +2703,6 @@ export default function Coach() {
                   {filteredFoods.map((f) => (
                     <tr key={f.id}>
                       <td style={{ fontWeight: 500 }}>{f.name}</td>
-                      {/* Serving: shows "1 egg", "1 tbsp", "100 g", etc. */}
                       <td style={{ color: "var(--muted)", fontSize: 12 }}>
                         {servingLabel(f)}
                       </td>
@@ -2415,6 +2730,21 @@ export default function Coach() {
         <AddFoodModal
           onClose={() => setShowAddFood(false)}
           onSave={handleAddFood}
+        />
+      )}
+
+      {/* Copy Plan Modal */}
+      {showCopyModal && (
+        <CopyPlanModal
+          type={showCopyModal}
+          planDates={planDates}
+          currentDate={selectedDate}
+          onClose={() => setShowCopyModal(null)}
+          onCopy={
+            showCopyModal === "diet"
+              ? handleCopyDietPlan
+              : handleCopyWorkoutPlan
+          }
         />
       )}
     </div>
