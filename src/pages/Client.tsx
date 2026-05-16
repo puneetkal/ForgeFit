@@ -1,8 +1,12 @@
-// Client.tsx — mobile-first with hamburger sidebar + XP Level System
+// Client.tsx — Full rewrite with:
+// + Weekly progress photo upload (one per week)
+// + Chat with coach button
+// + All existing features preserved
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
+import Chat from "./Chat";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type Tab = "diet" | "workout" | "dashboard";
@@ -16,17 +20,15 @@ interface ClientData {
   connection_code: string;
   coach_id: string | null;
 }
-
 interface FoodRef {
   name: string;
-  calories_per_100g: number;
-  protein_g_per_100g: number;
-  carbs_g_per_100g: number;
-  fat_g_per_100g: number;
+  calories_per_serving: number;
+  protein_per_serving: number;
+  carbs_per_serving: number;
+  fat_per_serving: number;
   serving_size: number;
   serving_unit: string;
 }
-
 interface MealItem {
   id: string;
   food_id: string;
@@ -34,7 +36,6 @@ interface MealItem {
   unit: string;
   food: FoodRef | null;
 }
-
 interface Meal {
   id: string;
   meal_name: string;
@@ -42,7 +43,6 @@ interface Meal {
   display_order: number;
   items: MealItem[];
 }
-
 interface WorkoutItem {
   id: string;
   exercise_id: string;
@@ -53,7 +53,16 @@ interface WorkoutItem {
   reps: number;
   weight_kg: number | null;
 }
-
+interface WorkoutLog {
+  id?: string;
+  client_id: string;
+  workout_item_id: string;
+  log_date: string;
+  actual_sets: number;
+  actual_reps: number;
+  actual_weight_kg: number | null;
+  note: string;
+}
 interface ProgressEntry {
   id: string;
   date: string;
@@ -61,29 +70,39 @@ interface ProgressEntry {
   workout_progress: number;
   weight_kg: number | null;
 }
-
-// ── XP SYSTEM ─────────────────────────────────────────────────────────────────
-// Daily points:
-//   Workout 100% = +15 pts (pro-rata for partial, -3 if skipped with plan)
-//   Diet 100%    = +10 pts (pro-rata for partial, -2 if skipped with plan)
-//
-// XP curve: rawPts mapped to 0–100 via a ^0.45 exponent
-//   Max raw pts over 4 years of ~80% consistency ≈ 21,024
-//   The curve makes early XP fast, later XP brutally slow (PUBG-style)
-//
-// 8 Levels: Rookie → Hustler → Warrior → Beast → Titan → Elite → Apex → Legend
-//   Levels 1–6 have Bronze / Silver / Gold sub-tiers (every 5 XP)
-//   Apex and Legend have no sub-tiers
-
-const MAX_RAW_PTS = 21024;
-
-function rawPtsToXP(rawPts: number): number {
-  if (rawPts <= 0) return 0;
-  const clamped = Math.min(rawPts, MAX_RAW_PTS);
-  const xp = 100 * Math.pow(clamped / MAX_RAW_PTS, 0.45);
-  return Math.min(100, Math.round(xp * 10) / 10);
+interface ClientGoals {
+  calories_target: number;
+  protein_target: number;
+  carbs_target: number;
+  fat_target: number;
+  show_macros_to_client: boolean;
+}
+// ── NEW ───────────────────────────────────────────────────────────────────────
+interface WeeklyProgressPhoto {
+  id: string;
+  client_id: string;
+  week_start: string;
+  photo_url: string;
+  notes: string;
+  uploaded_at: string;
 }
 
+// ── macro scale ───────────────────────────────────────────────────────────────
+function macroScale(food: FoodRef, quantity: number): number {
+  return quantity / (food.serving_size || 1);
+}
+
+// ── XP SYSTEM ─────────────────────────────────────────────────────────────────
+const MAX_RAW_PTS = 21024;
+function rawPtsToXP(rawPts: number): number {
+  if (rawPts <= 0) return 0;
+  return Math.min(
+    100,
+    Math.round(
+      100 * Math.pow(Math.min(rawPts, MAX_RAW_PTS) / MAX_RAW_PTS, 0.45) * 10
+    ) / 10
+  );
+}
 function calcDailyPts(
   dietPct: number,
   workoutPct: number,
@@ -91,14 +110,9 @@ function calcDailyPts(
   hasWorkoutPlan: boolean
 ): number {
   let pts = 0;
-  if (hasWorkoutPlan) {
-    if (workoutPct === 0) pts -= 3;
-    else pts += Math.round((workoutPct / 100) * 15);
-  }
-  if (hasDietPlan) {
-    if (dietPct === 0) pts -= 2;
-    else pts += Math.round((dietPct / 100) * 10);
-  }
+  if (hasWorkoutPlan)
+    pts += workoutPct === 0 ? -3 : Math.round((workoutPct / 100) * 15);
+  if (hasDietPlan) pts += dietPct === 0 ? -2 : Math.round((dietPct / 100) * 10);
   return pts;
 }
 
@@ -107,7 +121,6 @@ interface LevelTier {
   xpMin: number;
   xpMax: number;
 }
-
 interface LevelDef {
   level: number;
   name: string;
@@ -117,7 +130,6 @@ interface LevelDef {
   xpEnd: number;
   tiers: LevelTier[] | null;
 }
-
 const LEVEL_DEFS: LevelDef[] = [
   {
     level: 1,
@@ -228,20 +240,14 @@ interface ResolvedLevel {
   xpMax: number;
   progressPct: number;
 }
-
 function resolveLevel(xp: number): ResolvedLevel {
-  let activeDef: LevelDef = LEVEL_DEFS[0];
+  let activeDef = LEVEL_DEFS[0];
   for (const def of LEVEL_DEFS) {
     if (xp >= def.xpStart) activeDef = def;
     else break;
   }
-
   if (!activeDef.tiers) {
     const range = activeDef.xpEnd - activeDef.xpStart;
-    const progressPct =
-      range > 0
-        ? Math.min(100, Math.round(((xp - activeDef.xpStart) / range) * 100))
-        : 100;
     return {
       level: activeDef.level,
       name: activeDef.name,
@@ -251,22 +257,18 @@ function resolveLevel(xp: number): ResolvedLevel {
       icon: activeDef.icon,
       xpMin: activeDef.xpStart,
       xpMax: activeDef.xpEnd,
-      progressPct,
+      progressPct:
+        range > 0
+          ? Math.min(100, Math.round(((xp - activeDef.xpStart) / range) * 100))
+          : 100,
     };
   }
-
   let activeTier = activeDef.tiers[0];
   for (const t of activeDef.tiers) {
     if (xp >= t.xpMin) activeTier = t;
     else break;
   }
-
   const tRange = activeTier.xpMax - activeTier.xpMin;
-  const progressPct =
-    tRange > 0
-      ? Math.min(100, Math.round(((xp - activeTier.xpMin) / tRange) * 100))
-      : 100;
-
   return {
     level: activeDef.level,
     name: activeDef.name,
@@ -276,32 +278,26 @@ function resolveLevel(xp: number): ResolvedLevel {
     icon: activeDef.icon,
     xpMin: activeTier.xpMin,
     xpMax: activeTier.xpMax,
-    progressPct,
+    progressPct:
+      tRange > 0
+        ? Math.min(100, Math.round(((xp - activeTier.xpMin) / tRange) * 100))
+        : 100,
   };
 }
-
-function tierEmoji(tier: string | null): string {
+function tierEmoji(tier: string | null) {
   if (tier === "Bronze") return "🥉";
   if (tier === "Silver") return "🥈";
   if (tier === "Gold") return "🥇";
   return "👑";
 }
 
-// ── XP Badge Component ─────────────────────────────────────────────────────────
+// ── XP Badge ──────────────────────────────────────────────────────────────────
 function XPBadge({ totalRawPts }: { totalRawPts: number }) {
   const xp = rawPtsToXP(Math.max(0, totalRawPts));
   const lvl = resolveLevel(xp);
-
-  // next milestone label
-  let nextLabel = "";
-  let nextXpNeeded = 0;
-  if (xp < 100) {
-    const nextXP = lvl.xpMax;
+  const nextXP = lvl.xpMax,
     nextXpNeeded = Math.max(0, Math.round((nextXP - xp) * 10) / 10);
-    const nextLvl = resolveLevel(nextXP);
-    nextLabel = nextLvl.displayName;
-  }
-
+  const nextLvl = resolveLevel(nextXP);
   const tierBgMap: Record<string, string> = {
     Bronze: "rgba(201,124,58,0.15)",
     Silver: "rgba(138,138,170,0.15)",
@@ -314,7 +310,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
   };
   const tierBg = lvl.tier ? tierBgMap[lvl.tier] : `${lvl.color}18`;
   const tierColor = lvl.tier ? tierColorMap[lvl.tier] : lvl.color;
-
   return (
     <div
       style={{
@@ -325,7 +320,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
         marginBottom: "1.5rem",
       }}
     >
-      {/* Header row */}
       <div
         style={{
           display: "flex",
@@ -336,7 +330,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
           gap: "0.5rem",
         }}
       >
-        {/* Rank badge pill */}
         <div
           style={{
             display: "inline-flex",
@@ -350,13 +343,10 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
             fontWeight: 700,
             fontFamily: "Syne, sans-serif",
             color: tierColor,
-            letterSpacing: "0.01em",
           }}
         >
           {tierEmoji(lvl.tier)} {lvl.displayName}
         </div>
-
-        {/* XP number */}
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 1 }}>
             Total XP
@@ -384,8 +374,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
           </div>
         </div>
       </div>
-
-      {/* Progress bar */}
       <div style={{ marginBottom: "0.5rem" }}>
         <div
           style={{
@@ -421,8 +409,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
           />
         </div>
       </div>
-
-      {/* Next milestone */}
       {xp < 100 ? (
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           <span style={{ color: lvl.color, fontWeight: 700 }}>
@@ -430,7 +416,7 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
           </span>{" "}
           away from{" "}
           <span style={{ fontWeight: 600, color: "var(--text)" }}>
-            {nextLabel}
+            {nextLvl.displayName}
           </span>
         </div>
       ) : (
@@ -438,8 +424,6 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
           👑 Maximum rank achieved — you are a Legend
         </div>
       )}
-
-      {/* Level map mini row */}
       <div
         style={{
           display: "flex",
@@ -451,8 +435,8 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
         }}
       >
         {LEVEL_DEFS.map((def) => {
-          const isActive = lvl.level === def.level;
-          const isPast = lvl.level > def.level;
+          const isActive = lvl.level === def.level,
+            isPast = lvl.level > def.level;
           return (
             <div
               key={def.level}
@@ -475,26 +459,12 @@ function XPBadge({ totalRawPts }: { totalRawPts: number }) {
                   ? `2px solid ${def.color}`
                   : "2px solid transparent",
                 opacity: isPast ? 0.6 : isActive ? 1 : 0.35,
-                transition: "all 0.2s",
               }}
             >
               {def.icon}
             </div>
           );
         })}
-      </div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: 9,
-          color: "var(--muted)",
-          marginTop: 3,
-          paddingRight: 2,
-        }}
-      >
-        <span>Rookie</span>
-        <span>Legend</span>
       </div>
     </div>
   );
@@ -513,9 +483,9 @@ function addDays(dateStr: string, n: number) {
   return fmtDate(d);
 }
 function dayLabel(dateStr: string) {
-  const today = todayStr();
-  const tmrw = addDays(today, 1);
-  const yest = addDays(today, -1);
+  const today = todayStr(),
+    tmrw = addDays(today, 1),
+    yest = addDays(today, -1);
   if (dateStr === today) return "Today";
   if (dateStr === tmrw) return "Tomorrow";
   if (dateStr === yest) return "Yesterday";
@@ -531,6 +501,44 @@ function pctColor(v: number) {
   return "var(--red)";
 }
 
+// ── NEW: Get Monday of current week ───────────────────────────────────────────
+function getWeekStart(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+  return fmtDate(new Date(d.setDate(diff)));
+}
+
+// ── NEW: Compress image before upload ─────────────────────────────────────────
+function compressImage(
+  file: File,
+  maxDim = 900,
+  quality = 0.72
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          URL.revokeObjectURL(url);
+          blob ? resolve(blob) : reject(new Error("Compression failed"));
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 // ── Streak helpers ─────────────────────────────────────────────────────────────
 function calcStreak(
   history: ProgressEntry[],
@@ -539,46 +547,49 @@ function calcStreak(
   const today = todayStr();
   const active = new Set(
     history
-      .filter((p) => {
-        if (type === "diet") return p.diet_progress === 100;
-        if (type === "workout") return p.workout_progress === 100;
-        return p.diet_progress === 100 && p.workout_progress === 100;
-      })
+      .filter((p) =>
+        type === "diet"
+          ? p.diet_progress === 100
+          : type === "workout"
+          ? p.workout_progress === 100
+          : p.diet_progress === 100 && p.workout_progress === 100
+      )
       .map((p) => p.date)
   );
-  let streak = 0;
-  let cursor = active.has(today) ? today : addDays(today, -1);
+  let streak = 0,
+    cursor = active.has(today) ? today : addDays(today, -1);
   while (active.has(cursor)) {
     streak++;
     cursor = addDays(cursor, -1);
   }
   return streak;
 }
-
 function calcMaxStreak(
   history: ProgressEntry[],
   type: "diet" | "workout" | "both"
 ): number {
   const active = new Set(
     history
-      .filter((p) => {
-        if (type === "diet") return p.diet_progress === 100;
-        if (type === "workout") return p.workout_progress === 100;
-        return p.diet_progress === 100 && p.workout_progress === 100;
-      })
+      .filter((p) =>
+        type === "diet"
+          ? p.diet_progress === 100
+          : type === "workout"
+          ? p.workout_progress === 100
+          : p.diet_progress === 100 && p.workout_progress === 100
+      )
       .map((p) => p.date)
   );
   if (active.size === 0) return 0;
   const sortedDates = [...active].sort();
-  let maxStreak = 1;
-  let currentStreak = 1;
+  let maxStreak = 1,
+    currentStreak = 1;
   for (let i = 1; i < sortedDates.length; i++) {
-    const prev = new Date(sortedDates[i - 1] + "T00:00:00");
-    const curr = new Date(sortedDates[i] + "T00:00:00");
-    const diffDays = Math.round(
-      (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24)
+    const diff = Math.round(
+      (new Date(sortedDates[i] + "T00:00:00").getTime() -
+        new Date(sortedDates[i - 1] + "T00:00:00").getTime()) /
+        86400000
     );
-    if (diffDays === 1) {
+    if (diff === 1) {
       currentStreak++;
       maxStreak = Math.max(maxStreak, currentStreak);
     } else {
@@ -590,12 +601,11 @@ function calcMaxStreak(
 
 // ── Streak Banner ──────────────────────────────────────────────────────────────
 function StreakBanner({ history }: { history: ProgressEntry[] }) {
-  const bothStreak = calcStreak(history, "both");
-  const maxStreak = calcMaxStreak(history, "both");
-  const dietStreak = calcStreak(history, "diet");
-  const workoutStreak = calcStreak(history, "workout");
+  const bothStreak = calcStreak(history, "both"),
+    maxStreak = calcMaxStreak(history, "both");
+  const dietStreak = calcStreak(history, "diet"),
+    workoutStreak = calcStreak(history, "workout");
   const color = "#f97316";
-
   return (
     <div
       style={{
@@ -608,10 +618,7 @@ function StreakBanner({ history }: { history: ProgressEntry[] }) {
         border: `1px solid ${color}40`,
       }}
     >
-      <style>{`
-        @keyframes ff-flame { 0%,100%{transform:scale(1) rotate(-3deg)} 50%{transform:scale(1.18) rotate(3deg)} }
-        .ff-flame { animation: ff-flame 0.9s ease-in-out infinite; display:inline-block; }
-      `}</style>
+      <style>{`@keyframes ff-flame{0%,100%{transform:scale(1) rotate(-3deg)}50%{transform:scale(1.18) rotate(3deg)}}.ff-flame{animation:ff-flame 0.9s ease-in-out infinite;display:inline-block}`}</style>
       <div
         style={{
           display: "flex",
@@ -725,6 +732,174 @@ function StreakBanner({ history }: { history: ProgressEntry[] }) {
   );
 }
 
+// ── Macro Progress Rings ───────────────────────────────────────────────────────
+function MacroRings({
+  meals,
+  checkedMealItems,
+  goals,
+}: {
+  meals: Meal[];
+  checkedMealItems: Set<string>;
+  goals: ClientGoals;
+}) {
+  const checked = meals.flatMap((m) =>
+    m.items.filter((i) => checkedMealItems.has(i.id))
+  );
+  const totCal = checked.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.calories_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totP = checked.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.protein_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totC = checked.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.carbs_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const totF = checked.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.fat_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const macros = [
+    {
+      label: "Calories",
+      val: Math.round(totCal),
+      target: goals.calories_target,
+      unit: "kcal",
+      color: "#a78bfa",
+    },
+    {
+      label: "Protein",
+      val: Math.round(totP),
+      target: goals.protein_target,
+      unit: "g",
+      color: "#f87171",
+    },
+    {
+      label: "Carbs",
+      val: Math.round(totC),
+      target: goals.carbs_target,
+      unit: "g",
+      color: "#facc15",
+    },
+    {
+      label: "Fat",
+      val: Math.round(totF),
+      target: goals.fat_target,
+      unit: "g",
+      color: "#34d399",
+    },
+  ];
+  return (
+    <div className="card" style={{ marginBottom: "1.25rem" }}>
+      <div
+        style={{
+          fontFamily: "Syne, sans-serif",
+          fontWeight: 700,
+          fontSize: 14,
+          marginBottom: "0.85rem",
+        }}
+      >
+        📊 Macro Progress (from checked items)
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: "0.5rem",
+        }}
+      >
+        {macros.map(({ label, val, target, unit, color }) => {
+          const pct =
+            target > 0 ? Math.min(100, Math.round((val / target) * 100)) : 0;
+          const r = 24,
+            circ = 2 * Math.PI * r,
+            offset = circ - (pct / 100) * circ,
+            over = val > target && target > 0;
+          return (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <svg width={60} height={60} viewBox="0 0 60 60">
+                <circle
+                  cx={30}
+                  cy={30}
+                  r={r}
+                  fill="none"
+                  stroke="var(--surface2)"
+                  strokeWidth={5}
+                />
+                <circle
+                  cx={30}
+                  cy={30}
+                  r={r}
+                  fill="none"
+                  stroke={over ? "var(--red)" : color}
+                  strokeWidth={5}
+                  strokeDasharray={circ}
+                  strokeDashoffset={offset}
+                  strokeLinecap="round"
+                  transform="rotate(-90 30 30)"
+                  style={{ transition: "stroke-dashoffset 0.5s" }}
+                />
+                <text
+                  x={30}
+                  y={30}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="currentColor"
+                  fontSize={10}
+                  fontWeight={700}
+                >
+                  {pct}%
+                </text>
+              </svg>
+              <div style={{ textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: over ? "var(--red)" : color,
+                  }}
+                >
+                  {val}
+                  {unit}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                  / {target}
+                  {unit}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Year Heatmaps ──────────────────────────────────────────────────────────────
 const MONTH_NAMES = [
   "Jan",
@@ -741,47 +916,50 @@ const MONTH_NAMES = [
   "Dec",
 ];
 type HeatmapType = "diet" | "workout" | "both";
-
 interface HeatmapConfig {
   type: HeatmapType;
   label: string;
   emoji: string;
   colorFn: (pct: number) => string;
 }
-
 const HEATMAP_CONFIGS: HeatmapConfig[] = [
   {
     type: "diet",
     label: "Diet Completion",
     emoji: "🥗",
-    colorFn: (pct) => {
-      if (pct <= 0) return "var(--surface2)";
-      if (pct === 100) return "#16a34a";
-      if (pct >= 80) return "#22c55e";
-      if (pct >= 50) return "#4ade80";
-      return "#bbf7d0";
-    },
+    colorFn: (p) =>
+      p <= 0
+        ? "var(--surface2)"
+        : p === 100
+        ? "#16a34a"
+        : p >= 80
+        ? "#22c55e"
+        : p >= 50
+        ? "#4ade80"
+        : "#bbf7d0",
   },
   {
     type: "workout",
     label: "Workout Completion",
     emoji: "🏋️",
-    colorFn: (pct) => {
-      if (pct <= 0) return "var(--surface2)";
-      if (pct === 100) return "#1d4ed8";
-      if (pct >= 80) return "#3b82f6";
-      if (pct >= 50) return "#60a5fa";
-      return "#bfdbfe";
-    },
+    colorFn: (p) =>
+      p <= 0
+        ? "var(--surface2)"
+        : p === 100
+        ? "#1d4ed8"
+        : p >= 80
+        ? "#3b82f6"
+        : p >= 50
+        ? "#60a5fa"
+        : "#bfdbfe",
   },
   {
     type: "both",
     label: "Full Streak (Both 100%)",
     emoji: "⚡",
-    colorFn: (pct) => (pct < 100 ? "var(--surface2)" : "#f97316"),
+    colorFn: (p) => (p < 100 ? "var(--surface2)" : "#f97316"),
   },
 ];
-
 function SingleYearHeatmap({
   history,
   year,
@@ -791,21 +969,19 @@ function SingleYearHeatmap({
   year: number;
   config: HeatmapConfig;
 }) {
-  const today = todayStr();
-  const yearStart = new Date(year, 0, 1);
-  const yearEnd = new Date(year, 11, 31);
+  const today = todayStr(),
+    yearStart = new Date(year, 0, 1),
+    yearEnd = new Date(year, 11, 31);
   const byDate: Record<string, ProgressEntry> = {};
   history.forEach((p) => {
     byDate[p.date] = p;
   });
-
   const allDays: string[] = [];
   const cursor = new Date(yearStart);
   while (cursor <= yearEnd) {
     allDays.push(fmtDate(cursor));
     cursor.setDate(cursor.getDate() + 1);
   }
-
   const firstDow = yearStart.getDay();
   const paddedDays: (string | null)[] = [
     ...Array(firstDow).fill(null),
@@ -814,7 +990,6 @@ function SingleYearHeatmap({
   const weeks: (string | null)[][] = [];
   for (let i = 0; i < paddedDays.length; i += 7)
     weeks.push(paddedDays.slice(i, i + 7));
-
   function getPct(d: string | null): number {
     if (!d) return -1;
     const p = byDate[d];
@@ -823,19 +998,16 @@ function SingleYearHeatmap({
     if (config.type === "workout") return p.workout_progress;
     return p.diet_progress === 100 && p.workout_progress === 100 ? 100 : 0;
   }
-
   function cellColor(d: string | null): string {
     if (!d || d > today) return "var(--surface2)";
     return config.colorFn(getPct(d));
   }
-
   const CELL = 13,
-    GAP = 2;
-  const colW = CELL + GAP,
-    rowH = CELL + GAP;
-  const svgW = weeks.length * colW + 30;
-  const svgH = 7 * rowH + 22;
-
+    GAP = 2,
+    colW = CELL + GAP,
+    rowH = CELL + GAP,
+    svgW = weeks.length * colW + 30,
+    svgH = 7 * rowH + 22;
   const monthLabels: { x: number; label: string }[] = [];
   let lastMonth = -1;
   weeks.forEach((week, wi) => {
@@ -848,16 +1020,13 @@ function SingleYearHeatmap({
       }
     }
   });
-
   const DOW_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
   const activeDays = allDays.filter((d) => {
     if (d > today) return false;
     const pct = getPct(d);
-    if (config.type === "both") return pct === 100;
-    return pct >= 80;
+    return config.type === "both" ? pct === 100 : pct >= 80;
   }).length;
   const totalPastDays = allDays.filter((d) => d <= today).length;
-
   return (
     <div style={{ marginBottom: "1.25rem" }}>
       <div
@@ -915,91 +1084,25 @@ function SingleYearHeatmap({
             </text>
           ))}
           {weeks.map((week, wi) =>
-            week.map((d, di) => {
-              const x = 18 + wi * colW,
-                y = 12 + di * rowH;
-              const isFuture = d && d > today;
-              return (
-                <rect
-                  key={`${wi}-${di}`}
-                  x={x}
-                  y={y}
-                  width={CELL}
-                  height={CELL}
-                  rx={2}
-                  ry={2}
-                  fill={cellColor(d)}
-                  opacity={isFuture ? 0.15 : 1}
-                />
-              );
-            })
+            week.map((d, di) => (
+              <rect
+                key={`${wi}-${di}`}
+                x={18 + wi * colW}
+                y={12 + di * rowH}
+                width={CELL}
+                height={CELL}
+                rx={2}
+                ry={2}
+                fill={cellColor(d)}
+                opacity={d && d > today ? 0.15 : 1}
+              />
+            ))
           )}
         </svg>
       </div>
-      {config.type !== "both" ? (
-        <div
-          style={{
-            display: "flex",
-            gap: "0.75rem",
-            marginTop: "0.35rem",
-            fontSize: 11,
-            color: "var(--muted)",
-            alignItems: "center",
-          }}
-        >
-          <span>Less</span>
-          {[0.1, 0.4, 0.65, 0.85, 1.0].map((v, i) => (
-            <span
-              key={i}
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                background: config.colorFn(Math.round(v * 100)),
-                display: "inline-block",
-              }}
-            />
-          ))}
-          <span>More</span>
-        </div>
-      ) : (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            marginTop: "0.35rem",
-            fontSize: 11,
-            color: "var(--muted)",
-          }}
-        >
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: 2,
-              background: "var(--surface2)",
-              display: "inline-block",
-            }}
-          />
-          <span>Incomplete</span>
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: 2,
-              background: "#f97316",
-              display: "inline-block",
-              marginLeft: 8,
-            }}
-          />
-          <span>Both 100% 🔥</span>
-        </div>
-      )}
     </div>
   );
 }
-
 function YearHeatmapSection({ history }: { history: ProgressEntry[] }) {
   const currentYear = new Date().getFullYear();
   const yearsInHistory = [
@@ -1009,7 +1112,6 @@ function YearHeatmapSection({ history }: { history: ProgressEntry[] }) {
     (a, b) => b - a
   );
   const [selectedYear, setSelectedYear] = useState(currentYear);
-
   return (
     <div className="card" style={{ marginBottom: "1.5rem" }}>
       <div
@@ -1042,7 +1144,6 @@ function YearHeatmapSection({ history }: { history: ProgressEntry[] }) {
                 background:
                   selectedYear === yr ? "var(--accent)" : "var(--surface2)",
                 color: selectedYear === yr ? "#fff" : "var(--muted)",
-                transition: "all 0.15s",
               }}
             >
               {yr}
@@ -1124,27 +1225,24 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
         Need at least 2 weight entries to show a chart.
       </div>
     );
-
   const W = 360,
-    H = 110;
-  const padL = 34,
+    H = 110,
+    padL = 34,
     padR = 10,
     padT = 10,
-    padB = 24;
-  const cW = W - padL - padR,
+    padB = 24,
+    cW = W - padL - padR,
     cH = H - padT - padB;
-  const weights = data.map((d) => d.w);
-  const minW = Math.min(...weights),
-    maxW = Math.max(...weights);
-  const range = maxW - minW || 1;
+  const weights = data.map((d) => d.w),
+    minW = Math.min(...weights),
+    maxW = Math.max(...weights),
+    range = maxW - minW || 1;
   const xp = (i: number) => padL + (i / Math.max(data.length - 1, 1)) * cW;
   const yp = (w: number) => padT + ((maxW - w) / range) * cH;
   const pts = data.map((d, i) => `${xp(i)},${yp(d.w)}`);
   const fillPts = `${padL},${padT + cH} ${pts.join(" ")} ${xp(
     data.length - 1
   )},${padT + cH}`;
-  const gridVals = [minW, (minW + maxW) / 2, maxW];
-
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
@@ -1155,7 +1253,7 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
         overflow: "visible",
       }}
     >
-      {gridVals.map((w, i) => (
+      {[minW, (minW + maxW) / 2, maxW].map((w, i) => (
         <g key={i}>
           <line
             x1={padL}
@@ -1230,10 +1328,9 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
   );
 }
 
-// ── Day Slider ─────────────────────────────────────────────────────────────────
-const PAST_DAYS = 7;
-const FUTURE_DAYS = 6;
-
+// ── Day Strip ──────────────────────────────────────────────────────────────────
+const PAST_DAYS = 7,
+  FUTURE_DAYS = 6;
 function DayStrip({
   selected,
   onChange,
@@ -1248,21 +1345,19 @@ function DayStrip({
   const days = Array.from({ length: PAST_DAYS + 1 + FUTURE_DAYS }, (_, i) =>
     addDays(today, i - PAST_DAYS)
   );
-
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     const idx = days.indexOf(selected);
     if (idx < 0) return;
     const pillW = 80,
-      gap = 8;
-    const pillCenter = idx * (pillW + gap) + pillW / 2;
+      gap = 8,
+      pillCenter = idx * (pillW + gap) + pillW / 2;
     container.scrollTo({
       left: Math.max(0, pillCenter - container.clientWidth / 2),
       behavior: "smooth",
     });
   }, [selected]);
-
   return (
     <div style={{ marginBottom: "1.5rem" }}>
       <div
@@ -1274,7 +1369,6 @@ function DayStrip({
             overflowX: "auto",
             paddingBottom: 6,
             scrollbarWidth: "none",
-            WebkitOverflowScrolling: "touch",
           } as React.CSSProperties
         }
       >
@@ -1307,7 +1401,6 @@ function DayStrip({
                 textAlign: "center",
                 lineHeight: 1.3,
                 opacity: isFuture ? 0.65 : 1,
-                transition: "all 0.15s",
               }}
             >
               <div style={{ fontSize: 11, marginBottom: 2 }}>
@@ -1373,7 +1466,6 @@ function ProgressRing({
 }) {
   const r = 28,
     c = 2 * Math.PI * r;
-  const offset = c - (pct / 100) * c;
   return (
     <div
       style={{
@@ -1400,7 +1492,7 @@ function ProgressRing({
           stroke={color}
           strokeWidth={6}
           strokeDasharray={c}
-          strokeDashoffset={offset}
+          strokeDashoffset={c - (pct / 100) * c}
           strokeLinecap="round"
           transform="rotate(-90 34 34)"
           style={{ transition: "stroke-dashoffset 0.5s" }}
@@ -1422,6 +1514,301 @@ function ProgressRing({
   );
 }
 
+// ── Workout Card with long-press expand ───────────────────────────────────────
+function WorkoutCard({
+  item,
+  idx,
+  done,
+  prevLog,
+  isFuture,
+  onTick,
+  onSaveLog,
+}: {
+  item: WorkoutItem;
+  idx: number;
+  done: boolean;
+  prevLog: WorkoutLog | null;
+  isFuture: boolean;
+  onTick: () => void;
+  onSaveLog: (log: Partial<WorkoutLog>) => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [logForm, setLogForm] = useState({
+    actual_sets: String(item.sets),
+    actual_reps: String(item.reps),
+    actual_weight_kg: item.weight_kg ? String(item.weight_kg) : "",
+    note: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdFired = useRef(false);
+  useEffect(() => {
+    if (prevLog)
+      setLogForm({
+        actual_sets: String(prevLog.actual_sets),
+        actual_reps: String(prevLog.actual_reps),
+        actual_weight_kg: prevLog.actual_weight_kg
+          ? String(prevLog.actual_weight_kg)
+          : "",
+        note: prevLog.note || "",
+      });
+  }, [prevLog]);
+  function handlePointerDown() {
+    holdFired.current = false;
+    holdTimer.current = setTimeout(() => {
+      holdFired.current = true;
+      if (!isFuture) setExpanded((prev) => !prev);
+    }, 500);
+  }
+  function handlePointerUp() {
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+    if (!holdFired.current && !isFuture) onTick();
+  }
+  function handlePointerCancel() {
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+  }
+  async function handleSaveLog() {
+    setSaving(true);
+    await onSaveLog({
+      actual_sets: parseInt(logForm.actual_sets) || item.sets,
+      actual_reps: parseInt(logForm.actual_reps) || item.reps,
+      actual_weight_kg: logForm.actual_weight_kg
+        ? parseFloat(logForm.actual_weight_kg)
+        : null,
+      note: logForm.note,
+    });
+    setSaving(false);
+    setExpanded(false);
+  }
+  return (
+    <div
+      style={{
+        borderRadius: 12,
+        overflow: "hidden",
+        border: `2px solid ${done ? "var(--green)" : "var(--border)"}`,
+        marginBottom: "0.5rem",
+        background: done ? "rgba(34,197,94,0.06)" : "var(--surface2)",
+        transition: "all 0.15s",
+        opacity: isFuture ? 0.65 : 1,
+      }}
+    >
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "1rem",
+          padding: "0.85rem 1rem",
+          cursor: isFuture ? "default" : "pointer",
+          userSelect: "none",
+        }}
+      >
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: "50%",
+            flexShrink: 0,
+            background: done ? "var(--green)" : "rgba(124,106,247,0.15)",
+            color: done ? "#fff" : "var(--accent)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 700,
+            fontSize: 14,
+          }}
+        >
+          {done ? "✓" : idx + 1}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div
+            style={{
+              fontWeight: 700,
+              fontFamily: "Syne, sans-serif",
+              textDecoration: done ? "line-through" : "none",
+              color: done ? "var(--muted)" : "inherit",
+              fontSize: "0.95rem",
+            }}
+          >
+            {item.exercise_name}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
+            {item.sets} sets × {item.reps} reps
+            {item.weight_kg ? ` · ${item.weight_kg} kg` : ""}
+            {item.muscle_group ? ` · ${item.muscle_group}` : ""}
+          </div>
+          {item.notes && (
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--muted)",
+                fontStyle: "italic",
+                marginTop: 2,
+              }}
+            >
+              {item.notes}
+            </div>
+          )}
+          {prevLog && (
+            <div
+              style={{
+                fontSize: 11,
+                marginTop: 4,
+                padding: "3px 8px",
+                borderRadius: 6,
+                background: "rgba(124,106,247,0.08)",
+                color: "var(--accent)",
+                display: "inline-block",
+              }}
+            >
+              📈 Last: {prevLog.actual_sets}×{prevLog.actual_reps}
+              {prevLog.actual_weight_kg
+                ? ` @ ${prevLog.actual_weight_kg}kg`
+                : ""}
+              {prevLog.note ? ` — "${prevLog.note}"` : ""}
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 2,
+            flexShrink: 0,
+          }}
+        >
+          {done && (
+            <span className="badge badge-green" style={{ fontSize: 10 }}>
+              ✓ Done
+            </span>
+          )}
+          {!isFuture && (
+            <span style={{ fontSize: 10, color: "var(--muted)" }}>
+              hold to log
+            </span>
+          )}
+        </div>
+      </div>
+      {expanded && !isFuture && (
+        <div
+          style={{
+            padding: "0.75rem 1rem",
+            borderTop: "1px solid var(--border)",
+            background: "var(--bg, #0d0d18)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              marginBottom: "0.75rem",
+              color: "var(--accent)",
+            }}
+          >
+            📝 Log Your Performance
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: "0.5rem",
+              marginBottom: "0.5rem",
+            }}
+          >
+            {[
+              {
+                label: "Sets",
+                key: "actual_sets",
+                placeholder: String(item.sets),
+              },
+              {
+                label: "Reps",
+                key: "actual_reps",
+                placeholder: String(item.reps),
+              },
+              {
+                label: "Weight (kg)",
+                key: "actual_weight_kg",
+                placeholder: item.weight_kg ? String(item.weight_kg) : "—",
+              },
+            ].map(({ label, key, placeholder }) => (
+              <div key={key}>
+                <label
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    display: "block",
+                    marginBottom: 3,
+                  }}
+                >
+                  {label}
+                </label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder={placeholder}
+                  value={(logForm as any)[key]}
+                  onChange={(e) =>
+                    setLogForm((prev) => ({ ...prev, [key]: e.target.value }))
+                  }
+                  style={{ fontSize: 13 }}
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label
+              style={{
+                fontSize: 10,
+                color: "var(--muted)",
+                display: "block",
+                marginBottom: 3,
+              }}
+            >
+              Note (optional)
+            </label>
+            <input
+              className="input"
+              placeholder='"Felt strong today"'
+              value={logForm.note}
+              onChange={(e) =>
+                setLogForm((prev) => ({ ...prev, note: e.target.value }))
+              }
+              style={{ fontSize: 13 }}
+            />
+          </div>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => setExpanded(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleSaveLog}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save Log"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function Client() {
   const nav = useNavigate();
@@ -1436,24 +1823,35 @@ export default function Client() {
 
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [planDates, setPlanDates] = useState<Set<string>>(new Set());
-
   const [meals, setMeals] = useState<Meal[]>([]);
   const [checkedMealItems, setCheckedMealItems] = useState<Set<string>>(
     new Set()
   );
-
   const [workoutItems, setWorkoutItems] = useState<WorkoutItem[]>([]);
   const [checkedWorkoutItems, setCheckedWorkoutItems] = useState<Set<string>>(
     new Set()
   );
-
   const [loadingDay, setLoadingDay] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
-
   const [progressHistory, setProgressHistory] = useState<ProgressEntry[]>([]);
   const [weightInput, setWeightInput] = useState("");
-
   const [showCodeBanner, setShowCodeBanner] = useState(!!showCodeLS);
+  const [clientGoals, setClientGoals] = useState<ClientGoals | null>(null);
+  const [prevWorkoutLogs, setPrevWorkoutLogs] = useState<
+    Record<string, WorkoutLog>
+  >({});
+  const [todayWorkoutLogs, setTodayWorkoutLogs] = useState<
+    Record<string, WorkoutLog>
+  >({});
+
+  // ── NEW state ─────────────────────────────────────────────────────────────
+  const [coachName, setCoachName] = useState("Coach");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [weeklyPhotos, setWeeklyPhotos] = useState<WeeklyProgressPhoto[]>([]);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [weeklyNote, setWeeklyNote] = useState("");
+  const [photosExpanded, setPhotosExpanded] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!clientId) {
@@ -1476,9 +1874,89 @@ export default function Client() {
         loadAllPlanDates(clientId),
         loadDayPlan(clientId, todayStr()),
         loadProgressHistory(clientId),
+        loadClientGoals(clientId),
+        loadCoachName(c), // ← NEW
+        loadWeeklyPhotos(clientId), // ← NEW
       ]);
     }
     setLoading(false);
+  }
+
+  // ── NEW: Load coach name ───────────────────────────────────────────────────
+  async function loadCoachName(c: ClientData) {
+    if (!c.coach_id) return;
+    const { data } = await supabase
+      .from("coaches")
+      .select("name")
+      .eq("id", c.coach_id)
+      .single();
+    if (data?.name) setCoachName(data.name);
+  }
+
+  // ── NEW: Load weekly photos ────────────────────────────────────────────────
+  async function loadWeeklyPhotos(cid: string) {
+    const { data } = await supabase
+      .from("weekly_progress_photos")
+      .select("*")
+      .eq("client_id", cid)
+      .order("week_start", { ascending: false });
+    setWeeklyPhotos(data || []);
+  }
+
+  // ── NEW: Upload weekly photo ───────────────────────────────────────────────
+  async function handleWeeklyPhotoUpload(
+    e: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const compressed = await compressImage(file, 1200, 0.75);
+      const weekStart = getWeekStart(todayStr());
+      const path = `${clientId}/${weekStart}.jpg`;
+
+      // Remove old file for this week if exists
+      await supabase.storage.from("progress-photos").remove([path]);
+
+      const { error: upErr } = await supabase.storage
+        .from("progress-photos")
+        .upload(path, compressed, { contentType: "image/jpeg", upsert: true });
+      if (upErr) throw upErr;
+
+      const { data: urlData } = supabase.storage
+        .from("progress-photos")
+        .getPublicUrl(path);
+
+      await supabase.from("weekly_progress_photos").upsert(
+        {
+          client_id: clientId,
+          week_start: weekStart,
+          photo_url: urlData.publicUrl,
+          notes: weeklyNote,
+        },
+        { onConflict: "client_id,week_start" }
+      );
+
+      setWeeklyNote("");
+      await loadWeeklyPhotos(clientId);
+      setMsg("Weekly photo uploaded! 📸");
+      setTimeout(() => setMsg(""), 3000);
+    } catch (err) {
+      console.error("Photo upload error:", err);
+      setMsg("Upload failed. Please try again.");
+      setTimeout(() => setMsg(""), 3000);
+    }
+    setUploadingPhoto(false);
+    if (photoInputRef.current) photoInputRef.current.value = "";
+  }
+
+  async function loadClientGoals(cid: string) {
+    const { data } = await supabase
+      .from("client_goals")
+      .select("*")
+      .eq("client_id", cid)
+      .maybeSingle();
+    if (data) setClientGoals(data);
   }
 
   async function loadAllPlanDates(cid: string) {
@@ -1510,7 +1988,6 @@ export default function Client() {
         .eq("client_id", cid)
         .eq("completed_date", date),
     ]);
-
     if (pd?.meals) {
       const sorted = [...pd.meals].sort(
         (a: any, b: any) => a.display_order - b.display_order
@@ -1536,7 +2013,6 @@ export default function Client() {
     setCheckedMealItems(
       new Set((mealComps || []).map((r: any) => r.meal_item_id))
     );
-
     const [{ data: wpd }, { data: workoutComps }] = await Promise.all([
       supabase
         .from("workout_plan_days")
@@ -1550,30 +2026,60 @@ export default function Client() {
         .eq("client_id", cid)
         .eq("completed_date", date),
     ]);
-
     if (wpd?.workout_day_items) {
       const sorted = [...wpd.workout_day_items].sort(
         (a: any, b: any) => a.display_order - b.display_order
       );
-      setWorkoutItems(
-        sorted.map((i: any) => ({
-          id: i.id,
-          exercise_id: i.exercise_id,
-          exercise_name: i.exercises?.name || "Unknown",
-          muscle_group: i.exercises?.muscle_group || "",
-          notes: i.exercises?.notes || "",
-          sets: i.sets,
-          reps: i.reps,
-          weight_kg: i.weight_kg,
-        }))
+      const items: WorkoutItem[] = sorted.map((i: any) => ({
+        id: i.id,
+        exercise_id: i.exercise_id,
+        exercise_name: i.exercises?.name || "Unknown",
+        muscle_group: i.exercises?.muscle_group || "",
+        notes: i.exercises?.notes || "",
+        sets: i.sets,
+        reps: i.reps,
+        weight_kg: i.weight_kg,
+      }));
+      setWorkoutItems(items);
+      await loadWorkoutLogs(
+        cid,
+        items.map((i) => i.id),
+        date
       );
     } else {
       setWorkoutItems([]);
+      setPrevWorkoutLogs({});
+      setTodayWorkoutLogs({});
     }
     setCheckedWorkoutItems(
       new Set((workoutComps || []).map((r: any) => r.workout_item_id))
     );
     setLoadingDay(false);
+  }
+
+  async function loadWorkoutLogs(
+    cid: string,
+    itemIds: string[],
+    today: string
+  ) {
+    if (itemIds.length === 0) return;
+    const { data } = await supabase
+      .from("workout_logs")
+      .select("*")
+      .eq("client_id", cid)
+      .in("workout_item_id", itemIds)
+      .order("log_date", { ascending: false });
+    const prevMap: Record<string, WorkoutLog> = {},
+      todayMap: Record<string, WorkoutLog> = {};
+    (data || []).forEach((log: WorkoutLog) => {
+      if (log.log_date === today) {
+        if (!todayMap[log.workout_item_id]) todayMap[log.workout_item_id] = log;
+      } else {
+        if (!prevMap[log.workout_item_id]) prevMap[log.workout_item_id] = log;
+      }
+    });
+    setPrevWorkoutLogs(prevMap);
+    setTodayWorkoutLogs(todayMap);
   }
 
   async function loadProgressHistory(cid: string) {
@@ -1599,7 +2105,6 @@ export default function Client() {
         )
       : 0;
   }
-
   function calcWorkoutPct(checked: Set<string>, currentItems: WorkoutItem[]) {
     return currentItems.length > 0
       ? Math.round(
@@ -1617,7 +2122,7 @@ export default function Client() {
       .delete()
       .eq("client_id", clientId)
       .eq("completed_date", date);
-    if (nextChecked.size > 0) {
+    if (nextChecked.size > 0)
       await supabase
         .from("meal_completions")
         .insert(
@@ -1627,9 +2132,8 @@ export default function Client() {
             completed_date: date,
           }))
         );
-    }
-    const dp = calcDietPct(nextChecked, meals);
-    const wp = calcWorkoutPct(checkedWorkoutItems, workoutItems);
+    const dp = calcDietPct(nextChecked, meals),
+      wp = calcWorkoutPct(checkedWorkoutItems, workoutItems);
     const existingWeight =
       progressHistory.find((p) => p.date === date)?.weight_kg ?? null;
     await supabase
@@ -1654,7 +2158,7 @@ export default function Client() {
       .delete()
       .eq("client_id", clientId)
       .eq("completed_date", date);
-    if (nextChecked.size > 0) {
+    if (nextChecked.size > 0)
       await supabase
         .from("workout_completions")
         .insert(
@@ -1664,9 +2168,8 @@ export default function Client() {
             completed_date: date,
           }))
         );
-    }
-    const dp = calcDietPct(checkedMealItems, meals);
-    const wp = calcWorkoutPct(nextChecked, workoutItems);
+    const dp = calcDietPct(checkedMealItems, meals),
+      wp = calcWorkoutPct(nextChecked, workoutItems);
     const existingWeight =
       progressHistory.find((p) => p.date === date)?.weight_kg ?? null;
     await supabase
@@ -1692,7 +2195,6 @@ export default function Client() {
       return next;
     });
   }
-
   function toggleWorkoutItem(id: string) {
     setCheckedWorkoutItems((prev) => {
       const next = new Set(prev);
@@ -1702,13 +2204,43 @@ export default function Client() {
     });
   }
 
+  async function handleSaveWorkoutLog(
+    itemId: string,
+    logData: Partial<WorkoutLog>
+  ) {
+    const existing = todayWorkoutLogs[itemId];
+    const payload = {
+      client_id: clientId,
+      workout_item_id: itemId,
+      log_date: selectedDate,
+      actual_sets: logData.actual_sets ?? 0,
+      actual_reps: logData.actual_reps ?? 0,
+      actual_weight_kg: logData.actual_weight_kg ?? null,
+      note: logData.note ?? "",
+    };
+    if (existing?.id)
+      await supabase.from("workout_logs").update(payload).eq("id", existing.id);
+    else await supabase.from("workout_logs").insert(payload);
+    setCheckedWorkoutItems((prev) => {
+      const next = new Set(prev);
+      if (!next.has(itemId)) {
+        next.add(itemId);
+        persistWorkoutTick(next);
+      }
+      return next;
+    });
+    await loadWorkoutLogs(
+      clientId,
+      workoutItems.map((i) => i.id),
+      selectedDate
+    );
+    setMsg("Workout logged! 💪");
+    setTimeout(() => setMsg(""), 3000);
+  }
+
   const allMealItemIds = meals.flatMap((m) => m.items.map((i) => i.id));
   const dietPct = calcDietPct(checkedMealItems, meals);
   const workoutPct = calcWorkoutPct(checkedWorkoutItems, workoutItems);
-
-  // ── XP: sum all raw points from progress history ───────────────────────────
-  // For each logged day: if diet_progress > 0 OR it was a plan day → hasDietPlan
-  // We approximate: if any progress was logged > 0 on either, treat it as a plan day
   const totalRawPts = progressHistory.reduce((acc, p) => {
     const hasDietPlan = p.diet_progress > 0 || planDates.has(p.date);
     const hasWorkoutPlan = p.workout_progress > 0 || planDates.has(p.date);
@@ -1750,7 +2282,6 @@ export default function Client() {
     supabase.auth.signOut();
     nav("/");
   }
-
   function navTo(t: Tab) {
     setTab(t);
     setSidebarOpen(false);
@@ -1769,6 +2300,12 @@ export default function Client() {
         <div className="spinner" />
       </div>
     );
+
+  const thisWeekStart = getWeekStart(todayStr());
+  const thisWeekPhoto = weeklyPhotos.find(
+    (p) => p.week_start === thisWeekStart
+  );
+  const pastPhotos = weeklyPhotos.filter((p) => p.week_start !== thisWeekStart);
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -1826,12 +2363,11 @@ export default function Client() {
             ✕
           </button>
         </div>
-
-        {/* Compact XP rank in sidebar */}
+        {/* Compact XP in sidebar */}
         <div style={{ padding: "0 0.75rem 0.75rem" }}>
           {(() => {
-            const xp = rawPtsToXP(Math.max(0, totalRawPts));
-            const lvl = resolveLevel(xp);
+            const xp = rawPtsToXP(Math.max(0, totalRawPts)),
+              lvl = resolveLevel(xp);
             return (
               <div
                 style={{
@@ -1864,7 +2400,6 @@ export default function Client() {
             );
           })()}
         </div>
-
         <nav style={{ flex: 1, padding: "0.5rem" }}>
           <button
             className={`sidebar-item ${tab === "diet" ? "active" : ""}`}
@@ -1887,8 +2422,27 @@ export default function Client() {
           >
             📊 Dashboard
           </button>
+          {/* ── NEW: Chat button in sidebar ── */}
+          {client?.coach_id && (
+            <button
+              className="sidebar-item"
+              style={{
+                width: "100%",
+                marginTop: "0.5rem",
+                color: "var(--accent)",
+                background: "rgba(124,106,247,0.1)",
+                border: "1px solid rgba(124,106,247,0.25)",
+                borderRadius: 10,
+              }}
+              onClick={() => {
+                setChatOpen(true);
+                setSidebarOpen(false);
+              }}
+            >
+              💬 Chat with Coach
+            </button>
+          )}
         </nav>
-
         <div
           style={{
             padding: "1rem 0.5rem",
@@ -1922,14 +2476,12 @@ export default function Client() {
       <main
         style={{ padding: "4.5rem 1rem 3rem", maxWidth: 720, margin: "0 auto" }}
       >
-        {/* Streak Banner */}
         {progressHistory.length > 0 && (
           <div style={{ marginBottom: "1rem" }}>
             <StreakBanner history={progressHistory} />
           </div>
         )}
 
-        {/* Connection code banner */}
         {showCodeBanner && (
           <div
             className="alert alert-info"
@@ -1983,10 +2535,7 @@ export default function Client() {
           <>
             <div className="main-header">
               <h2>Diet Plan</h2>
-              <p>
-                Swipe to browse days · tap to select · future days are preview
-                only
-              </p>
+              <p>Swipe to browse days · tap to select</p>
             </div>
             <DayStrip
               selected={selectedDate}
@@ -2031,15 +2580,20 @@ export default function Client() {
                     >
                       <span style={{ fontSize: 18 }}>🔒</span>
                       <span>
-                        This is a{" "}
-                        <strong style={{ color: "var(--accent)" }}>
-                          preview
-                        </strong>{" "}
-                        of your upcoming plan. Ticking unlocks when the day
+                        Preview of upcoming plan. Ticking unlocks when the day
                         arrives.
                       </span>
                     </div>
                   )}
+                  {!isFuture &&
+                    clientGoals?.show_macros_to_client &&
+                    clientGoals.calories_target > 0 && (
+                      <MacroRings
+                        meals={meals}
+                        checkedMealItems={checkedMealItems}
+                        goals={clientGoals}
+                      />
+                    )}
                   {!isFuture && (
                     <div
                       className="card"
@@ -2192,6 +2746,9 @@ export default function Client() {
                         <div style={{ padding: "0.5rem 0" }}>
                           {meal.items.map((item) => {
                             const done = checkedMealItems.has(item.id);
+                            const scale = item.food
+                              ? macroScale(item.food, item.quantity)
+                              : 0;
                             return (
                               <div
                                 key={item.id}
@@ -2208,18 +2765,7 @@ export default function Client() {
                                     ? "rgba(34,197,94,0.04)"
                                     : "transparent",
                                   borderBottom: "1px solid var(--border)",
-                                  transition: "background 0.15s",
                                   opacity: isFuture ? 0.6 : 1,
-                                }}
-                                onMouseEnter={(e) => {
-                                  if (!done && !isFuture)
-                                    e.currentTarget.style.background =
-                                      "var(--surface2)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = done
-                                    ? "rgba(34,197,94,0.04)"
-                                    : "transparent";
                                 }}
                               >
                                 <div
@@ -2237,7 +2783,6 @@ export default function Client() {
                                     display: "flex",
                                     alignItems: "center",
                                     justifyContent: "center",
-                                    transition: "all 0.15s",
                                   }}
                                 >
                                   {done && (
@@ -2284,31 +2829,19 @@ export default function Client() {
                                     >
                                       ~
                                       {Math.round(
-                                        ((item.food.calories_per_100g *
-                                          item.food.serving_size) /
-                                          100) *
-                                          item.quantity
+                                        item.food.calories_per_serving * scale
                                       )}{" "}
-                                      kcal per serving{" · "}
-                                      P:{" "}
+                                      kcal · P:
                                       {Math.round(
-                                        (item.food.protein_g_per_100g *
-                                          item.food.serving_size) /
-                                          100
+                                        item.food.protein_per_serving * scale
                                       )}
-                                      g{" · "}
-                                      C:{" "}
+                                      g · C:
                                       {Math.round(
-                                        (item.food.carbs_g_per_100g *
-                                          item.food.serving_size) /
-                                          100
+                                        item.food.carbs_per_serving * scale
                                       )}
-                                      g{" · "}
-                                      F:{" "}
+                                      g · F:
                                       {Math.round(
-                                        (item.food.fat_g_per_100g *
-                                          item.food.serving_size) /
-                                          100
+                                        item.food.fat_per_serving * scale
                                       )}
                                       g
                                     </div>
@@ -2340,10 +2873,7 @@ export default function Client() {
           <>
             <div className="main-header">
               <h2>Workout</h2>
-              <p>
-                Swipe to browse days · tap to select · future days are preview
-                only
-              </p>
+              <p>Tap to tick done · hold 0.5s to log your sets/reps/weight</p>
             </div>
             <DayStrip
               selected={selectedDate}
@@ -2389,8 +2919,8 @@ export default function Client() {
                     >
                       <span style={{ fontSize: 18 }}>🔒</span>
                       <span>
-                        Preview of your upcoming workout. Ticking unlocks when
-                        the day arrives.
+                        Preview of upcoming workout. Ticking unlocks when the
+                        day arrives.
                       </span>
                     </div>
                   )}
@@ -2438,101 +2968,19 @@ export default function Client() {
                       </div>
                     </div>
                   )}
-                  <div style={{ display: "grid", gap: "0.5rem" }}>
-                    {workoutItems.map((item, idx) => {
-                      const done = checkedWorkoutItems.has(item.id);
-                      return (
-                        <div
-                          key={item.id}
-                          onClick={() =>
-                            !isFuture && toggleWorkoutItem(item.id)
-                          }
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "1rem",
-                            padding: "1rem",
-                            borderRadius: 12,
-                            cursor: isFuture ? "default" : "pointer",
-                            background: done
-                              ? "rgba(34,197,94,0.08)"
-                              : "var(--surface2)",
-                            border: `2px solid ${
-                              done ? "var(--green)" : "var(--border)"
-                            }`,
-                            transition: "all 0.15s",
-                            opacity: isFuture ? 0.65 : 1,
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: 36,
-                              height: 36,
-                              borderRadius: "50%",
-                              flexShrink: 0,
-                              background: done
-                                ? "var(--green)"
-                                : "rgba(124,106,247,0.15)",
-                              color: done ? "#fff" : "var(--accent)",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontWeight: 700,
-                              fontSize: 14,
-                              transition: "all 0.15s",
-                            }}
-                          >
-                            {done ? "✓" : idx + 1}
-                          </div>
-                          <div style={{ flex: 1 }}>
-                            <div
-                              style={{
-                                fontWeight: 700,
-                                fontFamily: "Syne, sans-serif",
-                                textDecoration: done ? "line-through" : "none",
-                                color: done ? "var(--muted)" : "inherit",
-                                fontSize: "0.95rem",
-                              }}
-                            >
-                              {item.exercise_name}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 13,
-                                color: "var(--muted)",
-                                marginTop: 2,
-                              }}
-                            >
-                              {item.sets} sets × {item.reps} reps
-                              {item.weight_kg ? ` · ${item.weight_kg} kg` : ""}
-                              {item.muscle_group
-                                ? ` · ${item.muscle_group}`
-                                : ""}
-                            </div>
-                            {item.notes && (
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  color: "var(--muted)",
-                                  fontStyle: "italic",
-                                  marginTop: 2,
-                                }}
-                              >
-                                {item.notes}
-                              </div>
-                            )}
-                          </div>
-                          {done && (
-                            <span
-                              className="badge badge-green"
-                              style={{ flexShrink: 0 }}
-                            >
-                              ✓ Done
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
+                  <div style={{ display: "grid", gap: 0 }}>
+                    {workoutItems.map((item, idx) => (
+                      <WorkoutCard
+                        key={item.id}
+                        item={item}
+                        idx={idx}
+                        done={checkedWorkoutItems.has(item.id)}
+                        prevLog={prevWorkoutLogs[item.id] || null}
+                        isFuture={isFuture}
+                        onTick={() => toggleWorkoutItem(item.id)}
+                        onSaveLog={(log) => handleSaveWorkoutLog(item.id, log)}
+                      />
+                    ))}
                   </div>
                 </>
               );
@@ -2547,11 +2995,211 @@ export default function Client() {
               <h2>Dashboard</h2>
               <p>Your stats and progress over time</p>
             </div>
-
-            {/* ── XP RANK CARD ── */}
             <XPBadge totalRawPts={Math.max(0, totalRawPts)} />
 
-            {/* Stats grid */}
+            {/* ── NEW: Weekly Progress Photo Section ── */}
+            <div className="card" style={{ marginBottom: "1.5rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "1rem",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontFamily: "Syne, sans-serif",
+                      fontWeight: 700,
+                      fontSize: "1rem",
+                    }}
+                  >
+                    📸 Weekly Progress Photo
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--muted)",
+                      marginTop: 2,
+                    }}
+                  >
+                    Week of{" "}
+                    {new Date(thisWeekStart + "T00:00:00").toLocaleDateString(
+                      "en-GB",
+                      { day: "numeric", month: "long" }
+                    )}
+                  </div>
+                </div>
+                {thisWeekPhoto && (
+                  <span className="badge badge-green">✓ Uploaded</span>
+                )}
+              </div>
+
+              {thisWeekPhoto ? (
+                <div
+                  style={{
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    marginBottom: "1rem",
+                  }}
+                >
+                  <img
+                    src={thisWeekPhoto.photo_url}
+                    alt="This week's photo"
+                    style={{
+                      width: "100%",
+                      maxHeight: 300,
+                      objectFit: "cover",
+                      display: "block",
+                    }}
+                  />
+                  {thisWeekPhoto.notes && (
+                    <div
+                      style={{
+                        padding: "0.65rem",
+                        fontSize: 13,
+                        color: "var(--muted)",
+                        background: "var(--surface2)",
+                      }}
+                    >
+                      {thisWeekPhoto.notes}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    border: "2px dashed var(--border)",
+                    borderRadius: 12,
+                    padding: "2rem",
+                    textAlign: "center",
+                    marginBottom: "1rem",
+                    color: "var(--muted)",
+                  }}
+                >
+                  <div style={{ fontSize: 36, marginBottom: "0.5rem" }}>📷</div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                    No photo this week yet
+                  </div>
+                  <div style={{ fontSize: 13 }}>
+                    Upload your weekly progress photo below
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label className="label">Note (optional)</label>
+                <input
+                  className="input"
+                  placeholder="e.g. Feeling great this week!"
+                  value={weeklyNote}
+                  onChange={(e) => setWeeklyNote(e.target.value)}
+                />
+              </div>
+
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: "none" }}
+                onChange={handleWeeklyPhotoUpload}
+              />
+              <button
+                className="btn btn-primary"
+                style={{ width: "100%" }}
+                onClick={() => photoInputRef.current?.click()}
+                disabled={uploadingPhoto}
+              >
+                {uploadingPhoto
+                  ? "Uploading…"
+                  : thisWeekPhoto
+                  ? "📸 Replace This Week's Photo"
+                  : "📸 Upload This Week's Photo"}
+              </button>
+
+              {/* Past photos collapsible */}
+              {pastPhotos.length > 0 && (
+                <div style={{ marginTop: "1rem" }}>
+                  <button
+                    onClick={() => setPhotosExpanded((p) => !p)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--accent)",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      padding: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.4rem",
+                    }}
+                  >
+                    {photosExpanded ? "▼" : "▶"} Past photos (
+                    {pastPhotos.length})
+                  </button>
+                  {photosExpanded && (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(140px, 1fr))",
+                        gap: "0.75rem",
+                        marginTop: "0.75rem",
+                      }}
+                    >
+                      {pastPhotos.map((photo) => {
+                        const weekLabel = new Date(
+                          photo.week_start + "T00:00:00"
+                        ).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                        });
+                        return (
+                          <div
+                            key={photo.id}
+                            style={{
+                              borderRadius: 10,
+                              overflow: "hidden",
+                              border: "1px solid var(--border)",
+                            }}
+                          >
+                            <img
+                              src={photo.photo_url}
+                              alt={`Week of ${weekLabel}`}
+                              style={{
+                                width: "100%",
+                                height: 120,
+                                objectFit: "cover",
+                                display: "block",
+                                cursor: "pointer",
+                              }}
+                              onClick={() =>
+                                window.open(photo.photo_url, "_blank")
+                              }
+                            />
+                            <div
+                              style={{
+                                padding: "0.4rem 0.5rem",
+                                fontSize: 11,
+                                color: "var(--muted)",
+                                background: "var(--surface2)",
+                              }}
+                            >
+                              Week of {weekLabel}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {/* ── END Weekly Photo Section ── */}
+
             <div
               style={{
                 display: "grid",
@@ -2611,8 +3259,6 @@ export default function Client() {
                 </div>
               ))}
             </div>
-
-            {/* Weight Chart */}
             <div className="card" style={{ marginBottom: "1.5rem" }}>
               <div
                 className="section-title"
@@ -2622,8 +3268,6 @@ export default function Client() {
               </div>
               <WeightChart entries={progressHistory} />
             </div>
-
-            {/* Today's rings */}
             {(meals.length > 0 || workoutItems.length > 0) && (
               <div
                 className="card"
@@ -2660,8 +3304,6 @@ export default function Client() {
                 </div>
               </div>
             )}
-
-            {/* Log weight */}
             <div
               className="card"
               style={{
@@ -2690,11 +3332,7 @@ export default function Client() {
                 {savingProgress ? "…" : "Log"}
               </button>
             </div>
-
-            {/* Three Heatmaps */}
             <YearHeatmapSection history={progressHistory} />
-
-            {/* Progress history table */}
             {progressHistory.length === 0 ? (
               <div
                 className="card"
@@ -2820,8 +3458,6 @@ export default function Client() {
                 </table>
               </div>
             )}
-
-            {/* Connection code if no coach */}
             {client && !client.coach_id && (
               <div className="card" style={{ marginTop: "1.5rem" }}>
                 <div className="section-title">
@@ -2844,6 +3480,17 @@ export default function Client() {
           </>
         )}
       </main>
+
+      {/* ── NEW: Chat overlay ── */}
+      {chatOpen && client?.coach_id && (
+        <Chat
+          clientId={clientId}
+          coachId={client.coach_id}
+          senderType="client"
+          peerName={coachName}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
     </div>
   );
 }

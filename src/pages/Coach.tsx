@@ -1,13 +1,29 @@
-//Coach.tsx — updated food system: per-serving instead of per-100g
-// + Copy Plan feature: copy diet/workout from any planned date
+// Coach.tsx — Full rewrite with:
+// + Delete food/exercise from database
+// + Search and sort clients list
+// + Weekly progress photos tab
+// + WhatsApp-style chat overlay
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
+import CoachSelf from "../components/CoachSelf";
+import Chat from "./Chat";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-type CoachView = "clients" | "client_detail" | "foods";
-type PlanTab = "diet" | "workout" | "progress";
+type CoachView = "clients" | "client_detail" | "foods" | "exercises";
+type PlanTab = "diet" | "workout" | "progress" | "goals" | "photos";
+type CopyPlanType = "diet" | "workout";
+
+interface ClientGoals {
+  id?: string;
+  client_id: string;
+  calories_target: number;
+  protein_target: number;
+  carbs_target: number;
+  fat_target: number;
+  show_macros_to_client: boolean;
+}
 
 interface ClientRow {
   id: string;
@@ -19,7 +35,6 @@ interface ClientRow {
   coach_id: string | null;
 }
 
-// ── UPDATED Food interface — per-serving ──────────────────────────────────────
 interface Food {
   id: string;
   name: string;
@@ -37,16 +52,19 @@ interface Exercise {
   muscle_group: string;
   notes: string;
 }
+
 interface MealItemDraft {
   food_id: string;
   quantity: number;
   unit: string;
   food?: Food;
 }
+
 interface MealDraft {
   meal_name: string;
   items: MealItemDraft[];
 }
+
 interface WorkoutItemDraft {
   exercise_id: string;
   sets: number;
@@ -54,12 +72,22 @@ interface WorkoutItemDraft {
   weight_kg: number | null;
   exercise?: Exercise;
 }
+
 interface ProgressEntry {
   id: string;
   date: string;
   diet_progress: number;
   workout_progress: number;
   weight_kg: number | null;
+}
+
+interface WeeklyPhoto {
+  id: string;
+  client_id: string;
+  week_start: string;
+  photo_url: string;
+  notes: string;
+  uploaded_at: string;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -74,8 +102,14 @@ function pctColor(v: number) {
   if (v >= 50) return "#facc15";
   return "var(--red)";
 }
+function macroScale(food: Food, quantity: number): number {
+  return quantity / (food.serving_size || 1);
+}
+function servingLabel(food: Food): string {
+  const sz = food.serving_size === 1 ? "" : `${food.serving_size} `;
+  return `${sz}${food.serving_unit}`;
+}
 
-// ── Serving unit helpers ───────────────────────────────────────────────────────
 const SERVING_UNIT_SUGGESTIONS = [
   "g",
   "ml",
@@ -89,21 +123,6 @@ const SERVING_UNIT_SUGGESTIONS = [
   "bowl",
   "roti",
 ];
-
-function servingLabel(food: Food): string {
-  const sz = food.serving_size === 1 ? "" : `${food.serving_size} `;
-  return `${sz}${food.serving_unit}`;
-}
-
-function macroSummary(food: Food, qty = 1): string {
-  const scale = qty;
-  return [
-    `${Math.round(food.calories_per_serving * scale)} kcal`,
-    `P ${(food.protein_per_serving * scale).toFixed(1)}g`,
-    `C ${(food.carbs_per_serving * scale).toFixed(1)}g`,
-    `F ${(food.fat_per_serving * scale).toFixed(1)}g`,
-  ].join(" · ");
-}
 
 // ── Hamburger Button ───────────────────────────────────────────────────────────
 function HamburgerBtn({ onClick }: { onClick: () => void }) {
@@ -152,7 +171,6 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
     .filter((e) => e.weight_kg !== null)
     .map((e) => ({ date: e.date, w: e.weight_kg as number }))
     .sort((a, b) => a.date.localeCompare(b.date));
-
   if (data.length < 2)
     return (
       <div
@@ -166,27 +184,24 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
         Need at least 2 weight entries to show a chart.
       </div>
     );
-
   const W = 360,
-    H = 110;
-  const padL = 34,
+    H = 110,
+    padL = 34,
     padR = 10,
     padT = 10,
-    padB = 24;
-  const cW = W - padL - padR,
+    padB = 24,
+    cW = W - padL - padR,
     cH = H - padT - padB;
-  const weights = data.map((d) => d.w);
-  const minW = Math.min(...weights),
-    maxW = Math.max(...weights);
-  const range = maxW - minW || 1;
+  const weights = data.map((d) => d.w),
+    minW = Math.min(...weights),
+    maxW = Math.max(...weights),
+    range = maxW - minW || 1;
   const xp = (i: number) => padL + (i / Math.max(data.length - 1, 1)) * cW;
   const yp = (w: number) => padT + ((maxW - w) / range) * cH;
   const pts = data.map((d, i) => `${xp(i)},${yp(d.w)}`);
   const fillPts = `${padL},${padT + cH} ${pts.join(" ")} ${xp(
     data.length - 1
   )},${padT + cH}`;
-  const gridVals = [minW, (minW + maxW) / 2, maxW];
-
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
@@ -197,7 +212,7 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
         overflow: "visible",
       }}
     >
-      {gridVals.map((w, i) => (
+      {[minW, (minW + maxW) / 2, maxW].map((w, i) => (
         <g key={i}>
           <line
             x1={padL}
@@ -248,17 +263,6 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
       >
         {data[0].date.slice(5).replace("-", "/")}
       </text>
-      {data.length > 3 && (
-        <text
-          x={xp(Math.floor(data.length / 2))}
-          y={H - 5}
-          fontSize={7}
-          fill="var(--muted)"
-          textAnchor="middle"
-        >
-          {data[Math.floor(data.length / 2)].date.slice(5).replace("-", "/")}
-        </text>
-      )}
       <text
         x={xp(data.length - 1)}
         y={H - 5}
@@ -452,7 +456,6 @@ interface NewFoodState {
   carbs_per_serving: string;
   fat_per_serving: string;
 }
-
 const EMPTY_FOOD: NewFoodState = {
   name: "",
   serving_size: "1",
@@ -473,17 +476,14 @@ function AddFoodModal({
   const [form, setForm] = useState<NewFoodState>(EMPTY_FOOD);
   const [saving, setSaving] = useState(false);
   const [customUnit, setCustomUnit] = useState(false);
-
   function set(k: keyof NewFoodState, v: string) {
     setForm((p) => ({ ...p, [k]: v }));
   }
-
   const previewCal = parseFloat(form.calories_per_serving) || 0;
   const previewP = parseFloat(form.protein_per_serving) || 0;
   const previewC = parseFloat(form.carbs_per_serving) || 0;
   const previewF = parseFloat(form.fat_per_serving) || 0;
   const servingDisplay = `${form.serving_size} ${form.serving_unit}`.trim();
-
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name || !form.serving_unit) return;
@@ -491,7 +491,6 @@ function AddFoodModal({
     await onSave(form);
     setSaving(false);
   }
-
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -509,7 +508,7 @@ function AddFoodModal({
             <input
               className="input"
               required
-              placeholder="e.g. Egg, Peanut Butter, Brown Rice, Whole Milk"
+              placeholder="e.g. Egg, Peanut Butter, Brown Rice"
               value={form.name}
               onChange={(e) => set("name", e.target.value)}
             />
@@ -539,7 +538,7 @@ function AddFoodModal({
                 {customUnit ? (
                   <input
                     className="input"
-                    placeholder="e.g. banana, roti, chapati, katori"
+                    placeholder="e.g. banana, roti, chapati"
                     value={form.serving_unit}
                     onChange={(e) => set("serving_unit", e.target.value)}
                     autoFocus
@@ -556,9 +555,7 @@ function AddFoodModal({
                       if (e.target.value === "__custom") {
                         setCustomUnit(true);
                         set("serving_unit", "");
-                      } else {
-                        set("serving_unit", e.target.value);
-                      }
+                      } else set("serving_unit", e.target.value);
                     }}
                   >
                     {SERVING_UNIT_SUGGESTIONS.map((u) => (
@@ -569,79 +566,8 @@ function AddFoodModal({
                     <option value="__custom">custom…</option>
                   </select>
                 )}
-                {customUnit && (
-                  <button
-                    type="button"
-                    style={{
-                      marginTop: 4,
-                      fontSize: 11,
-                      color: "var(--muted)",
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 0,
-                    }}
-                    onClick={() => {
-                      setCustomUnit(false);
-                      set("serving_unit", "unit");
-                    }}
-                  >
-                    ← back to presets
-                  </button>
-                )}
               </div>
             </div>
-            {!customUnit && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "0.35rem",
-                  marginTop: "0.5rem",
-                }}
-              >
-                {SERVING_UNIT_SUGGESTIONS.map((u) => (
-                  <button
-                    key={u}
-                    type="button"
-                    onClick={() => set("serving_unit", u)}
-                    style={{
-                      padding: "2px 10px",
-                      borderRadius: 20,
-                      fontSize: 12,
-                      cursor: "pointer",
-                      border: "none",
-                      background:
-                        form.serving_unit === u
-                          ? "var(--accent)"
-                          : "var(--surface2)",
-                      color: form.serving_unit === u ? "#fff" : "var(--muted)",
-                      fontWeight: form.serving_unit === u ? 700 : 400,
-                    }}
-                  >
-                    {u}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCustomUnit(true);
-                    set("serving_unit", "");
-                  }}
-                  style={{
-                    padding: "2px 10px",
-                    borderRadius: 20,
-                    fontSize: 12,
-                    cursor: "pointer",
-                    border: "1px dashed var(--border)",
-                    background: "transparent",
-                    color: "var(--muted)",
-                  }}
-                >
-                  + custom
-                </button>
-              </div>
-            )}
             <div
               style={{
                 marginTop: "0.5rem",
@@ -653,8 +579,7 @@ function AddFoodModal({
               <strong style={{ color: "var(--text)" }}>
                 {servingDisplay || "1 serving"}
               </strong>{" "}
-              below. For eggs: size=1 unit=egg, calories=78. For peanut butter:
-              size=1 unit=tbsp, calories=94.
+              below.
             </div>
           </div>
           <div>
@@ -723,7 +648,7 @@ function AddFoodModal({
               }}
             >
               <span style={{ fontWeight: 700, color: "var(--accent)" }}>
-                Preview — 1 serving ({servingDisplay}):
+                Preview ({servingDisplay}):
               </span>
               <span>{previewCal} kcal</span>
               <span style={{ color: "#f87171" }}>P {previewP}g</span>
@@ -751,11 +676,172 @@ function AddFoodModal({
   );
 }
 
+// ── Macro Rings for Client Diet Plan ──────────────────────────────────────────
+function ClientMacroRings({
+  meals,
+  goals,
+}: {
+  meals: MealDraft[];
+  goals: ClientGoals | null;
+}) {
+  if (!goals || goals.calories_target === 0) return null;
+  const allItems = meals.flatMap((m) => m.items);
+  const totCal = allItems.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.calories_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totP = allItems.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.protein_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totC = allItems.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.carbs_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const totF = allItems.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.fat_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const macros = [
+    {
+      label: "Calories",
+      val: Math.round(totCal),
+      target: goals.calories_target,
+      unit: "kcal",
+      color: "#a78bfa",
+    },
+    {
+      label: "Protein",
+      val: Math.round(totP),
+      target: goals.protein_target,
+      unit: "g",
+      color: "#f87171",
+    },
+    {
+      label: "Carbs",
+      val: Math.round(totC),
+      target: goals.carbs_target,
+      unit: "g",
+      color: "#facc15",
+    },
+    {
+      label: "Fat",
+      val: Math.round(totF),
+      target: goals.fat_target,
+      unit: "g",
+      color: "#34d399",
+    },
+  ];
+  return (
+    <div className="card" style={{ marginBottom: "1.25rem" }}>
+      <div
+        style={{
+          fontFamily: "Syne, sans-serif",
+          fontWeight: 700,
+          fontSize: 14,
+          marginBottom: "0.85rem",
+        }}
+      >
+        📊 Plan Macro Preview (vs client targets)
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: "0.5rem",
+        }}
+      >
+        {macros.map(({ label, val, target, unit, color }) => {
+          const pct =
+            target > 0 ? Math.min(100, Math.round((val / target) * 100)) : 0;
+          const r = 24,
+            circ = 2 * Math.PI * r,
+            offset = circ - (pct / 100) * circ;
+          const over = val > target && target > 0;
+          return (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <svg width={60} height={60} viewBox="0 0 60 60">
+                <circle
+                  cx={30}
+                  cy={30}
+                  r={r}
+                  fill="none"
+                  stroke="var(--surface2)"
+                  strokeWidth={5}
+                />
+                <circle
+                  cx={30}
+                  cy={30}
+                  r={r}
+                  fill="none"
+                  stroke={over ? "var(--red)" : color}
+                  strokeWidth={5}
+                  strokeDasharray={circ}
+                  strokeDashoffset={offset}
+                  strokeLinecap="round"
+                  transform="rotate(-90 30 30)"
+                  style={{ transition: "stroke-dashoffset 0.5s" }}
+                />
+                <text
+                  x={30}
+                  y={30}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="currentColor"
+                  fontSize={10}
+                  fontWeight={700}
+                >
+                  {pct}%
+                </text>
+              </svg>
+              <div style={{ textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: over ? "var(--red)" : color,
+                  }}
+                >
+                  {val}
+                  {unit}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                  / {target}
+                  {unit}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Copy Plan Modal ────────────────────────────────────────────────────────────
-// Lets the coach pick any date that already has a plan and copy it to the current date.
-
-type CopyPlanType = "diet" | "workout";
-
 function CopyPlanModal({
   type,
   planDates,
@@ -769,24 +855,18 @@ function CopyPlanModal({
   onClose: () => void;
   onCopy: (fromDate: string) => Promise<void>;
 }) {
-  // Only show dates that have a plan and are not the current date
   const availableDates = Array.from(planDates)
     .filter((d) => d !== currentDate)
-    .sort((a, b) => b.localeCompare(a)); // newest first
-
+    .sort((a, b) => b.localeCompare(a));
   const [selected, setSelected] = useState<string>(availableDates[0] || "");
   const [copying, setCopying] = useState(false);
-
   async function handleCopy() {
     if (!selected) return;
     setCopying(true);
     await onCopy(selected);
     setCopying(false);
   }
-
   const typeLabel = type === "diet" ? "Diet" : "Workout";
-  const typeEmoji = type === "diet" ? "🥗" : "🏋️";
-
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -795,9 +875,8 @@ function CopyPlanModal({
         style={{ maxWidth: 420, width: "95vw" }}
       >
         <div className="modal-title">
-          {typeEmoji} Copy {typeLabel} Plan
+          {type === "diet" ? "🥗" : "🏋️"} Copy {typeLabel} Plan
         </div>
-
         <p
           style={{
             color: "var(--muted)",
@@ -806,8 +885,7 @@ function CopyPlanModal({
             marginTop: 0,
           }}
         >
-          Select a date to copy the {typeLabel.toLowerCase()} plan{" "}
-          <strong style={{ color: "var(--text)" }}>from</strong>. It will
+          Select a date to copy the {typeLabel.toLowerCase()} plan from. It will
           replace the current plan for{" "}
           <strong style={{ color: "var(--accent)" }}>
             {new Date(currentDate + "T00:00:00").toLocaleDateString("en-GB", {
@@ -818,7 +896,6 @@ function CopyPlanModal({
           </strong>
           .
         </p>
-
         {availableDates.length === 0 ? (
           <div
             style={{
@@ -831,7 +908,7 @@ function CopyPlanModal({
               marginBottom: "1rem",
             }}
           >
-            No other planned dates found. Create plans on other dates first.
+            No other planned dates found.
           </div>
         ) : (
           <div
@@ -866,15 +943,14 @@ function CopyPlanModal({
                     padding: "0.65rem 0.9rem",
                     borderRadius: 10,
                     cursor: "pointer",
+                    textAlign: "left",
+                    color: "inherit",
                     border: isSelected
                       ? "2px solid var(--accent)"
                       : "1px solid var(--border)",
                     background: isSelected
                       ? "rgba(124,106,247,0.1)"
                       : "var(--surface2)",
-                    color: "inherit",
-                    textAlign: "left",
-                    transition: "all 0.15s",
                   }}
                 >
                   <span
@@ -887,7 +963,6 @@ function CopyPlanModal({
                         ? "5px solid var(--accent)"
                         : "2px solid var(--border)",
                       background: isSelected ? "var(--accent)" : "transparent",
-                      transition: "all 0.15s",
                     }}
                   />
                   <div>
@@ -914,8 +989,6 @@ function CopyPlanModal({
             })}
           </div>
         )}
-
-        {/* Warning */}
         {availableDates.length > 0 && (
           <div
             style={{
@@ -932,7 +1005,6 @@ function CopyPlanModal({
             for the selected date.
           </div>
         )}
-
         <div
           style={{
             display: "flex",
@@ -960,9 +1032,11 @@ function CopyPlanModal({
 export default function Coach() {
   const nav = useNavigate();
   const coachId = localStorage.getItem("coach_id") || "";
+  const coachName = localStorage.getItem("coach_name") || "Coach";
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view, setView] = useState<CoachView>("clients");
+  const [showSelfJourney, setShowSelfJourney] = useState(false);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [selectedClient, setSelectedClient] = useState<ClientRow | null>(null);
   const [foods, setFoods] = useState<Food[]>([]);
@@ -991,9 +1065,39 @@ export default function Coach() {
 
   const [showAddFood, setShowAddFood] = useState(false);
   const [foodSearch, setFoodSearch] = useState("");
-
-  // ── Copy Plan state ──────────────────────────────────────────────────────────
   const [showCopyModal, setShowCopyModal] = useState<CopyPlanType | null>(null);
+
+  const [clientGoals, setClientGoals] = useState<ClientGoals | null>(null);
+  const [goalsForm, setGoalsForm] = useState({
+    calories_target: "",
+    protein_target: "",
+    carbs_target: "",
+    fat_target: "",
+    show_macros_to_client: false,
+  });
+  const [savingGoals, setSavingGoals] = useState(false);
+
+  const [showAddExercise, setShowAddExercise] = useState(false);
+  const [exerciseSearch, setExerciseSearch] = useState("");
+  const [newExercise, setNewExercise] = useState({
+    name: "",
+    muscle_group: "",
+    notes: "",
+  });
+  const [savingExercise, setSavingExercise] = useState(false);
+
+  // ── NEW: Client search / sort ──────────────────────────────────────────────
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientSort, setClientSort] = useState<"name" | "recent">("name");
+
+  // ── NEW: Weekly photos ─────────────────────────────────────────────────────
+  const [weeklyPhotos, setWeeklyPhotos] = useState<WeeklyPhoto[]>([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+
+  // ── NEW: Chat overlay ──────────────────────────────────────────────────────
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatClientId, setChatClientId] = useState("");
+  const [chatClientName, setChatClientName] = useState("");
 
   useEffect(() => {
     if (!coachId) {
@@ -1038,7 +1142,6 @@ export default function Coach() {
       .eq("client_id", clientId)
       .eq("plan_date", date)
       .maybeSingle();
-
     if (pd) {
       setDietNote(pd.diet_note || "");
       const sm = [...(pd.meals || [])].sort(
@@ -1066,7 +1169,6 @@ export default function Coach() {
       .eq("client_id", clientId)
       .eq("plan_date", date)
       .maybeSingle();
-
     if (wpd) {
       const sw = [...(wpd.workout_day_items || [])].sort(
         (a: any, b: any) => a.display_order - b.display_order
@@ -1096,6 +1198,139 @@ export default function Coach() {
     setClientProgress(data || []);
   }
 
+  async function loadClientGoals(clientId: string) {
+    const { data } = await supabase
+      .from("client_goals")
+      .select("*")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (data) {
+      setClientGoals(data);
+      setGoalsForm({
+        calories_target: String(data.calories_target || ""),
+        protein_target: String(data.protein_target || ""),
+        carbs_target: String(data.carbs_target || ""),
+        fat_target: String(data.fat_target || ""),
+        show_macros_to_client: data.show_macros_to_client || false,
+      });
+    } else {
+      setClientGoals(null);
+      setGoalsForm({
+        calories_target: "",
+        protein_target: "",
+        carbs_target: "",
+        fat_target: "",
+        show_macros_to_client: false,
+      });
+    }
+  }
+
+  // ── NEW: Load weekly progress photos ──────────────────────────────────────
+  async function loadWeeklyPhotos(clientId: string) {
+    setLoadingPhotos(true);
+    const { data } = await supabase
+      .from("weekly_progress_photos")
+      .select("*")
+      .eq("client_id", clientId)
+      .order("week_start", { ascending: false });
+    setWeeklyPhotos(data || []);
+    setLoadingPhotos(false);
+  }
+
+  // ── NEW: Download single photo ─────────────────────────────────────────────
+  async function downloadPhoto(url: string, filename: string) {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      window.open(url, "_blank");
+    }
+  }
+
+  // ── NEW: Download all photos ───────────────────────────────────────────────
+  async function downloadAllPhotos() {
+    if (!weeklyPhotos.length) return;
+    for (let i = 0; i < weeklyPhotos.length; i++) {
+      const p = weeklyPhotos[i];
+      await downloadPhoto(
+        p.photo_url,
+        `${selectedClient?.name ?? "client"}-week-${p.week_start}.jpg`
+      );
+      if (i < weeklyPhotos.length - 1)
+        await new Promise((r) => setTimeout(r, 600));
+    }
+    flash("All photos downloaded!");
+  }
+
+  // ── NEW: Delete food item ──────────────────────────────────────────────────
+  async function deleteFoodItem(foodId: string, foodName: string) {
+    if (
+      !confirm(
+        `Delete "${foodName}" from the food database?\nThis cannot be undone and may affect existing plans.`
+      )
+    )
+      return;
+    const { error: de } = await supabase
+      .from("foods")
+      .delete()
+      .eq("id", foodId);
+    if (de) {
+      setError(de.message);
+      return;
+    }
+    setFoods((prev) => prev.filter((f) => f.id !== foodId));
+    flash(`"${foodName}" deleted.`);
+  }
+
+  // ── NEW: Delete exercise item ──────────────────────────────────────────────
+  async function deleteExerciseItem(exerciseId: string, exerciseName: string) {
+    if (
+      !confirm(
+        `Delete "${exerciseName}" from the exercise library?\nThis cannot be undone and may affect existing workout plans.`
+      )
+    )
+      return;
+    const { error: de } = await supabase
+      .from("exercises")
+      .delete()
+      .eq("id", exerciseId);
+    if (de) {
+      setError(de.message);
+      return;
+    }
+    setExercises((prev) => prev.filter((e) => e.id !== exerciseId));
+    flash(`"${exerciseName}" deleted.`);
+  }
+
+  async function saveClientGoals() {
+    if (!selectedClient) return;
+    setSavingGoals(true);
+    const payload = {
+      client_id: selectedClient.id,
+      calories_target: parseFloat(goalsForm.calories_target) || 0,
+      protein_target: parseFloat(goalsForm.protein_target) || 0,
+      carbs_target: parseFloat(goalsForm.carbs_target) || 0,
+      fat_target: parseFloat(goalsForm.fat_target) || 0,
+      show_macros_to_client: goalsForm.show_macros_to_client,
+    };
+    const { data, error: ge } = await supabase
+      .from("client_goals")
+      .upsert(payload, { onConflict: "client_id" })
+      .select()
+      .single();
+    if (ge) setError(ge.message);
+    else {
+      setClientGoals(data);
+      flash("Goals saved!");
+    }
+    setSavingGoals(false);
+  }
+
   async function openClient(c: ClientRow) {
     setSelectedClient(c);
     setView("client_detail");
@@ -1107,6 +1342,8 @@ export default function Coach() {
       loadClientDates(c.id),
       loadPlanForDate(c.id, today),
       loadClientProgress(c.id),
+      loadClientGoals(c.id),
+      loadWeeklyPhotos(c.id), // ← NEW
     ]);
   }
 
@@ -1171,7 +1408,6 @@ export default function Coach() {
       setSavingDiet(false);
       return;
     }
-
     const { data: oldMeals } = await supabase
       .from("meals")
       .select("id")
@@ -1188,7 +1424,7 @@ export default function Coach() {
     }
     for (let mi = 0; mi < meals.length; mi++) {
       const m = meals[mi];
-      const { data: mRow, error: me } = await supabase
+      const { data: mRow } = await supabase
         .from("meals")
         .insert({
           plan_day_id: pd.id,
@@ -1198,8 +1434,7 @@ export default function Coach() {
         })
         .select()
         .single();
-      if (me || !mRow) continue;
-      if (m.items.length > 0) {
+      if (mRow && m.items.length > 0) {
         await supabase
           .from("meal_items")
           .insert(
@@ -1215,6 +1450,50 @@ export default function Coach() {
     setPlanDates((prev) => new Set([...prev, selectedDate]));
     flash("Diet plan saved!");
     setSavingDiet(false);
+  }
+
+  async function deleteDietPlan() {
+    if (!selectedClient) return;
+    if (
+      !confirm(
+        `Delete diet plan for ${new Date(
+          selectedDate + "T00:00:00"
+        ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}?`
+      )
+    )
+      return;
+    const { data: pd } = await supabase
+      .from("plan_days")
+      .select("id")
+      .eq("client_id", selectedClient.id)
+      .eq("plan_date", selectedDate)
+      .maybeSingle();
+    if (pd) {
+      const { data: oldMeals } = await supabase
+        .from("meals")
+        .select("id")
+        .eq("plan_day_id", pd.id);
+      if (oldMeals?.length) {
+        await supabase
+          .from("meal_items")
+          .delete()
+          .in(
+            "meal_id",
+            oldMeals.map((m: any) => m.id)
+          );
+        await supabase.from("meals").delete().eq("plan_day_id", pd.id);
+      }
+      await supabase.from("plan_days").delete().eq("id", pd.id);
+      await supabase
+        .from("meal_completions")
+        .delete()
+        .eq("client_id", selectedClient.id)
+        .eq("completed_date", selectedDate);
+    }
+    setMeals([]);
+    setDietNote("");
+    await loadClientDates(selectedClient.id);
+    flash("Diet plan removed.");
   }
 
   async function saveWorkoutPlan() {
@@ -1242,24 +1521,57 @@ export default function Coach() {
       .delete()
       .eq("workout_plan_day_id", wpd.id);
     if (workoutItems.length > 0) {
-      await supabase.from("workout_day_items").insert(
-        workoutItems.map((i, idx) => ({
-          workout_plan_day_id: wpd.id,
-          exercise_id: i.exercise_id,
-          sets: i.sets,
-          reps: i.reps,
-          weight_kg: i.weight_kg || null,
-          display_order: idx + 1,
-        }))
-      );
+      await supabase
+        .from("workout_day_items")
+        .insert(
+          workoutItems.map((i, idx) => ({
+            workout_plan_day_id: wpd.id,
+            exercise_id: i.exercise_id,
+            sets: i.sets,
+            reps: i.reps,
+            weight_kg: i.weight_kg || null,
+            display_order: idx + 1,
+          }))
+        );
     }
     setPlanDates((prev) => new Set([...prev, selectedDate]));
     flash("Workout plan saved!");
     setSavingWorkout(false);
   }
 
-  // ── COPY DIET PLAN ───────────────────────────────────────────────────────────
-  // Fetches the diet plan from `fromDate` and loads it into local state (doesn't auto-save)
+  async function deleteWorkoutPlan() {
+    if (!selectedClient) return;
+    if (
+      !confirm(
+        `Delete workout plan for ${new Date(
+          selectedDate + "T00:00:00"
+        ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}?`
+      )
+    )
+      return;
+    const { data: wpd } = await supabase
+      .from("workout_plan_days")
+      .select("id")
+      .eq("client_id", selectedClient.id)
+      .eq("plan_date", selectedDate)
+      .maybeSingle();
+    if (wpd) {
+      await supabase
+        .from("workout_day_items")
+        .delete()
+        .eq("workout_plan_day_id", wpd.id);
+      await supabase.from("workout_plan_days").delete().eq("id", wpd.id);
+      await supabase
+        .from("workout_completions")
+        .delete()
+        .eq("client_id", selectedClient.id)
+        .eq("completed_date", selectedDate);
+    }
+    setWorkoutItems([]);
+    await loadClientDates(selectedClient.id);
+    flash("Workout plan removed.");
+  }
+
   async function handleCopyDietPlan(fromDate: string) {
     if (!selectedClient) return;
     const { data: pd } = await supabase
@@ -1268,13 +1580,11 @@ export default function Coach() {
       .eq("client_id", selectedClient.id)
       .eq("plan_date", fromDate)
       .maybeSingle();
-
     if (!pd) {
       setError("No diet plan found for that date.");
       setShowCopyModal(null);
       return;
     }
-
     setDietNote(pd.diet_note || "");
     const sm = [...(pd.meals || [])].sort(
       (a: any, b: any) => a.display_order - b.display_order
@@ -1290,20 +1600,15 @@ export default function Coach() {
         })),
       }))
     );
-
     setShowCopyModal(null);
     flash(
-      `✓ Diet plan copied from ${new Date(
-        fromDate + "T00:00:00"
-      ).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-      })} — remember to save!`
+      `✓ Diet copied from ${new Date(fromDate + "T00:00:00").toLocaleDateString(
+        "en-GB",
+        { day: "numeric", month: "short" }
+      )} — remember to save!`
     );
   }
 
-  // ── COPY WORKOUT PLAN ────────────────────────────────────────────────────────
-  // Fetches the workout plan from `fromDate` and loads it into local state (doesn't auto-save)
   async function handleCopyWorkoutPlan(fromDate: string) {
     if (!selectedClient) return;
     const { data: wpd } = await supabase
@@ -1312,13 +1617,11 @@ export default function Coach() {
       .eq("client_id", selectedClient.id)
       .eq("plan_date", fromDate)
       .maybeSingle();
-
     if (!wpd) {
       setError("No workout plan found for that date.");
       setShowCopyModal(null);
       return;
     }
-
     const sw = [...(wpd.workout_day_items || [])].sort(
       (a: any, b: any) => a.display_order - b.display_order
     );
@@ -1331,10 +1634,9 @@ export default function Coach() {
         exercise: i.exercises,
       }))
     );
-
     setShowCopyModal(null);
     flash(
-      `✓ Workout plan copied from ${new Date(
+      `✓ Workout copied from ${new Date(
         fromDate + "T00:00:00"
       ).toLocaleDateString("en-GB", {
         day: "numeric",
@@ -1343,7 +1645,6 @@ export default function Coach() {
     );
   }
 
-  // ── UPDATED: addFood uses per-serving fields ─────────────────────────────────
   async function handleAddFood(form: NewFoodState) {
     const { data, error: fe } = await supabase
       .from("foods")
@@ -1369,12 +1670,36 @@ export default function Coach() {
     flash("Food added!");
   }
 
+  async function handleAddExercise() {
+    if (!newExercise.name.trim()) return;
+    setSavingExercise(true);
+    const { data, error: ee } = await supabase
+      .from("exercises")
+      .insert({
+        name: newExercise.name.trim(),
+        muscle_group: newExercise.muscle_group.trim(),
+        notes: newExercise.notes.trim(),
+      })
+      .select()
+      .single();
+    if (ee) {
+      setError(ee.message);
+    } else {
+      setExercises((prev) =>
+        [...prev, data].sort((a, b) => a.name.localeCompare(b.name))
+      );
+      setNewExercise({ name: "", muscle_group: "", notes: "" });
+      setShowAddExercise(false);
+      flash("Exercise added!");
+    }
+    setSavingExercise(false);
+  }
+
   function flash(m: string) {
     setMsg(m);
     setTimeout(() => setMsg(""), 3500);
   }
 
-  // ── Meal helpers ─────────────────────────────────────────────────────────────
   const MEAL_NAMES = [
     "Breakfast",
     "Mid-Morning Snack",
@@ -1394,11 +1719,6 @@ export default function Coach() {
       },
     ]);
   }
-  function updateMealName(mi: number, name: string) {
-    setMeals((prev) =>
-      prev.map((m, i) => (i !== mi ? m : { ...m, meal_name: name }))
-    );
-  }
   function removeMeal(mi: number) {
     setMeals((prev) => prev.filter((_, i) => i !== mi));
   }
@@ -1413,7 +1733,12 @@ export default function Coach() {
               ...m,
               items: [
                 ...m.items,
-                { food_id: f.id, quantity: 1, unit: f.serving_unit, food: f },
+                {
+                  food_id: f.id,
+                  quantity: f.serving_size,
+                  unit: f.serving_unit,
+                  food: f,
+                },
               ],
             }
       )
@@ -1432,7 +1757,7 @@ export default function Coach() {
               food_id: value,
               food: f,
               unit: f?.serving_unit || "unit",
-              quantity: 1,
+              quantity: f?.serving_size || 1,
             };
           }
           return { ...it, [field]: value };
@@ -1468,6 +1793,7 @@ export default function Coach() {
       })
     );
   }
+
   function handleLogout() {
     localStorage.clear();
     supabase.auth.signOut();
@@ -1491,6 +1817,18 @@ export default function Coach() {
         <div className="spinner" />
       </div>
     );
+
+  if (showSelfJourney) {
+    return (
+      <CoachSelf
+        coachId={coachId}
+        coachName={coachName}
+        foods={foods}
+        exercises={exercises}
+        onClose={() => setShowSelfJourney(false)}
+      />
+    );
+  }
 
   const selDateDisplay = new Date(
     selectedDate + "T00:00:00"
@@ -1516,6 +1854,19 @@ export default function Coach() {
     (f) =>
       !foodSearch || f.name.toLowerCase().includes(foodSearch.toLowerCase())
   );
+
+  // ── NEW: Filtered + sorted clients ────────────────────────────────────────
+  const filteredClients = clients
+    .filter(
+      (c) =>
+        !clientSearch ||
+        c.name.toLowerCase().includes(clientSearch.toLowerCase())
+    )
+    .sort((a, b) =>
+      clientSort === "name"
+        ? a.name.localeCompare(b.name)
+        : b.weight_kg - a.weight_kg
+    );
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -1573,6 +1924,39 @@ export default function Coach() {
             ✕
           </button>
         </div>
+        <div style={{ padding: "0 0.75rem 0.75rem" }}>
+          <button
+            onClick={() => {
+              setShowSelfJourney(true);
+              setSidebarOpen(false);
+            }}
+            style={{
+              width: "100%",
+              padding: "0.65rem 0.85rem",
+              borderRadius: 12,
+              background:
+                "linear-gradient(135deg, var(--accent) 0%, #a855f7 100%)",
+              border: "none",
+              color: "#fff",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.65rem",
+              fontFamily: "Syne, sans-serif",
+              fontWeight: 700,
+              fontSize: 13,
+              boxShadow: "0 4px 14px rgba(124,106,247,0.35)",
+            }}
+          >
+            <span style={{ fontSize: 18 }}>🏅</span>
+            <div style={{ textAlign: "left" }}>
+              <div>My Journey</div>
+              <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>
+                Track your own fitness
+              </div>
+            </div>
+          </button>
+        </div>
         <nav style={{ flex: 1, padding: "0.5rem" }}>
           <button
             className={`sidebar-item ${view === "clients" ? "active" : ""}`}
@@ -1587,6 +1971,13 @@ export default function Coach() {
             onClick={() => navTo("foods")}
           >
             🥑 Food Database
+          </button>
+          <button
+            className={`sidebar-item ${view === "exercises" ? "active" : ""}`}
+            style={{ width: "100%" }}
+            onClick={() => navTo("exercises")}
+          >
+            🏃 Exercise Library
           </button>
         </nav>
         <div
@@ -1631,7 +2022,7 @@ export default function Coach() {
           </div>
         )}
 
-        {/* ── CLIENTS ── */}
+        {/* ── CLIENTS VIEW ── */}
         {view === "clients" && (
           <>
             <div className="main-header">
@@ -1641,6 +2032,106 @@ export default function Coach() {
                 {clients.length !== 1 ? "s" : ""}
               </p>
             </div>
+
+            {/* Coach self journey card */}
+            <div
+              onClick={() => setShowSelfJourney(true)}
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(124,106,247,0.15) 0%, rgba(168,85,247,0.1) 100%)",
+                border: "2px solid var(--accent)",
+                borderRadius: 14,
+                padding: "1rem 1.25rem",
+                marginBottom: "1.5rem",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "1rem",
+                transition: "all 0.15s",
+                position: "relative",
+                overflow: "hidden",
+              }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.transform = "translateY(-1px)")
+              }
+              onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: -20,
+                  right: -20,
+                  width: 80,
+                  height: 80,
+                  borderRadius: "50%",
+                  background: "var(--accent)",
+                  opacity: 0.08,
+                  filter: "blur(20px)",
+                }}
+              />
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 14,
+                  flexShrink: 0,
+                  background:
+                    "linear-gradient(135deg, var(--accent) 0%, #a855f7 100%)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 24,
+                  boxShadow: "0 4px 14px rgba(124,106,247,0.4)",
+                }}
+              >
+                🏅
+              </div>
+              <div style={{ flex: 1 }}>
+                <div
+                  style={{
+                    fontFamily: "Syne, sans-serif",
+                    fontWeight: 800,
+                    fontSize: "1.05rem",
+                    color: "var(--accent)",
+                  }}
+                >
+                  {coachName}
+                  <span
+                    style={{
+                      marginLeft: "0.5rem",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      background: "var(--accent)",
+                      color: "#fff",
+                      padding: "2px 8px",
+                      borderRadius: 20,
+                    }}
+                  >
+                    YOU
+                  </span>
+                </div>
+                <div
+                  style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}
+                >
+                  Track your own diet, workouts & progress
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "0.4rem 0.9rem",
+                  borderRadius: 8,
+                  background: "var(--accent)",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                Open →
+              </div>
+            </div>
+
+            {/* Connect client */}
             <div className="card" style={{ marginBottom: "1.5rem" }}>
               <div className="section-title">Connect a Client</div>
               <p
@@ -1680,7 +2171,56 @@ export default function Coach() {
                 </button>
               </div>
             </div>
-            {clients.length === 0 ? (
+
+            {/* ── NEW: Search + Sort bar ── */}
+            {clients.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.75rem",
+                  marginBottom: "1rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <input
+                  className="input"
+                  style={{ flex: 1, minWidth: 180 }}
+                  placeholder="Search clients…"
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                />
+                <div style={{ display: "flex", gap: "0.4rem" }}>
+                  {(["name", "recent"] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setClientSort(s)}
+                      style={{
+                        padding: "0 0.85rem",
+                        height: 42,
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        fontSize: 13,
+                        border:
+                          clientSort === s
+                            ? "2px solid var(--accent)"
+                            : "1px solid var(--border)",
+                        background:
+                          clientSort === s
+                            ? "rgba(124,106,247,0.15)"
+                            : "var(--surface2)",
+                        color:
+                          clientSort === s ? "var(--accent)" : "var(--muted)",
+                      }}
+                    >
+                      {s === "name" ? "A–Z" : "Recent"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {filteredClients.length === 0 && clients.length === 0 ? (
               <div
                 className="card"
                 style={{
@@ -1691,9 +2231,20 @@ export default function Coach() {
               >
                 No clients yet. Connect your first client above.
               </div>
+            ) : filteredClients.length === 0 ? (
+              <div
+                className="card"
+                style={{
+                  textAlign: "center",
+                  padding: "2rem",
+                  color: "var(--muted)",
+                }}
+              >
+                No clients match "{clientSearch}".
+              </div>
             ) : (
               <div style={{ display: "grid", gap: "0.75rem" }}>
-                {clients.map((c) => (
+                {filteredClients.map((c) => (
                   <div
                     key={c.id}
                     className="card"
@@ -1751,13 +2302,25 @@ export default function Coach() {
               >
                 ← Back
               </button>
-              <div>
+              <div style={{ flex: 1 }}>
                 <h2 style={{ margin: 0 }}>{selectedClient.name}</h2>
                 <p style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}>
                   Age {selectedClient.age} · {selectedClient.height_cm} cm ·{" "}
                   {selectedClient.weight_kg} kg
                 </p>
               </div>
+              {/* ── NEW: Chat button ── */}
+              <button
+                className="btn btn-outline btn-sm"
+                style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
+                onClick={() => {
+                  setChatClientId(selectedClient.id);
+                  setChatClientName(selectedClient.name);
+                  setChatOpen(true);
+                }}
+              >
+                💬 Chat
+              </button>
             </div>
 
             {/* Calendar */}
@@ -1858,16 +2421,33 @@ export default function Coach() {
               >
                 📊 Progress
               </button>
+              <button
+                className={`tab ${planTab === "goals" ? "active" : ""}`}
+                onClick={() => setPlanTab("goals")}
+              >
+                🎯 Goals
+              </button>
+              {/* ── NEW: Photos tab ── */}
+              <button
+                className={`tab ${planTab === "photos" ? "active" : ""}`}
+                onClick={() => {
+                  setPlanTab("photos");
+                  if (selectedClient) loadWeeklyPhotos(selectedClient.id);
+                }}
+              >
+                📸 Photos
+              </button>
             </div>
 
-            {loadingPlan && planTab !== "progress" ? (
+            {loadingPlan && planTab !== "progress" && planTab !== "photos" ? (
               <div style={{ textAlign: "center", padding: "3rem" }}>
                 <div className="spinner" />
               </div>
             ) : planTab === "diet" ? (
-              // ── DIET BUILDER ──────────────────────────────────────────────────
               <>
-                {/* Copy Diet Plan banner */}
+                {clientGoals && clientGoals.calories_target > 0 && (
+                  <ClientMacroRings meals={meals} goals={clientGoals} />
+                )}
                 <div
                   style={{
                     display: "flex",
@@ -1884,19 +2464,33 @@ export default function Coach() {
                   <div style={{ fontSize: 13, color: "var(--muted)" }}>
                     📋{" "}
                     <span style={{ color: "var(--text)" }}>
-                      Reuse a plan from another day?
+                      Reuse or manage plans
                     </span>
                   </div>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    onClick={() => setShowCopyModal("diet")}
-                    disabled={planDates.size === 0}
-                    style={{ flexShrink: 0 }}
+                  <div
+                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
                   >
-                    Copy Diet Plan
-                  </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setShowCopyModal("diet")}
+                      disabled={planDates.size === 0}
+                    >
+                      Copy Plan
+                    </button>
+                    {meals.length > 0 && (
+                      <button
+                        className="btn btn-sm"
+                        style={{
+                          background: "rgba(248,113,113,0.15)",
+                          color: "var(--red)",
+                        }}
+                        onClick={deleteDietPlan}
+                      >
+                        🗑 Remove
+                      </button>
+                    )}
+                  </div>
                 </div>
-
                 <div style={{ marginBottom: "1rem" }}>
                   <label className="label">Day Note (optional)</label>
                   <input
@@ -1906,7 +2500,6 @@ export default function Coach() {
                     onChange={(e) => setDietNote(e.target.value)}
                   />
                 </div>
-
                 {meals.length === 0 && (
                   <div
                     className="card"
@@ -1920,34 +2513,43 @@ export default function Coach() {
                     No meals yet. Click "+ Add Meal" to build the plan.
                   </div>
                 )}
-
                 {meals.map((meal, mi) => {
                   const totalCal = meal.items.reduce(
                     (s, it) =>
                       s +
                       (it.food
-                        ? it.food.calories_per_serving * it.quantity
+                        ? it.food.calories_per_serving *
+                          macroScale(it.food, it.quantity)
                         : 0),
                     0
                   );
                   const totalP = meal.items.reduce(
                     (s, it) =>
                       s +
-                      (it.food ? it.food.protein_per_serving * it.quantity : 0),
+                      (it.food
+                        ? it.food.protein_per_serving *
+                          macroScale(it.food, it.quantity)
+                        : 0),
                     0
                   );
                   const totalC = meal.items.reduce(
                     (s, it) =>
                       s +
-                      (it.food ? it.food.carbs_per_serving * it.quantity : 0),
+                      (it.food
+                        ? it.food.carbs_per_serving *
+                          macroScale(it.food, it.quantity)
+                        : 0),
                     0
                   );
                   const totalF = meal.items.reduce(
                     (s, it) =>
-                      s + (it.food ? it.food.fat_per_serving * it.quantity : 0),
+                      s +
+                      (it.food
+                        ? it.food.fat_per_serving *
+                          macroScale(it.food, it.quantity)
+                        : 0),
                     0
                   );
-
                   return (
                     <div
                       key={mi}
@@ -1993,7 +2595,15 @@ export default function Coach() {
                             fontFamily: "Syne,sans-serif",
                           }}
                           value={meal.meal_name}
-                          onChange={(e) => updateMealName(mi, e.target.value)}
+                          onChange={(e) =>
+                            setMeals((prev) =>
+                              prev.map((m, i) =>
+                                i !== mi
+                                  ? m
+                                  : { ...m, meal_name: e.target.value }
+                              )
+                            )
+                          }
                         />
                         <button
                           className="btn btn-sm"
@@ -2051,7 +2661,8 @@ export default function Coach() {
                           const food = item.food;
                           const itemCal = food
                             ? Math.round(
-                                food.calories_per_serving * item.quantity
+                                food.calories_per_serving *
+                                  macroScale(food, item.quantity)
                               )
                             : 0;
                           return (
@@ -2101,8 +2712,8 @@ export default function Coach() {
                                   <input
                                     className="input"
                                     type="number"
-                                    min="0.25"
-                                    step="0.25"
+                                    min="0.1"
+                                    step="any"
                                     style={{
                                       fontSize: 13,
                                       flex: 1,
@@ -2156,20 +2767,22 @@ export default function Coach() {
                                   }}
                                 >
                                   <span>
-                                    1 {food.serving_unit} ={" "}
+                                    {food.serving_size}
+                                    {food.serving_unit} ={" "}
                                     {food.calories_per_serving} kcal · P{" "}
                                     {food.protein_per_serving}g · C{" "}
                                     {food.carbs_per_serving}g · F{" "}
                                     {food.fat_per_serving}g
                                   </span>
-                                  {item.quantity !== 1 && (
+                                  {item.quantity !== food.serving_size && (
                                     <span
                                       style={{
                                         color: "var(--accent)",
                                         fontWeight: 600,
                                       }}
                                     >
-                                      × {item.quantity} = {itemCal} kcal total
+                                      {item.quantity}
+                                      {food.serving_unit} = {itemCal} kcal
                                     </span>
                                   )}
                                 </div>
@@ -2188,7 +2801,6 @@ export default function Coach() {
                     </div>
                   );
                 })}
-
                 {meals.length > 0 &&
                   (() => {
                     const allItems = meals.flatMap((m) => m.items);
@@ -2196,7 +2808,8 @@ export default function Coach() {
                       (s, it) =>
                         s +
                         (it.food
-                          ? it.food.calories_per_serving * it.quantity
+                          ? it.food.calories_per_serving *
+                            macroScale(it.food, it.quantity)
                           : 0),
                       0
                     );
@@ -2204,20 +2817,27 @@ export default function Coach() {
                       (s, it) =>
                         s +
                         (it.food
-                          ? it.food.protein_per_serving * it.quantity
+                          ? it.food.protein_per_serving *
+                            macroScale(it.food, it.quantity)
                           : 0),
                       0
                     );
                     const dayTotalC = allItems.reduce(
                       (s, it) =>
                         s +
-                        (it.food ? it.food.carbs_per_serving * it.quantity : 0),
+                        (it.food
+                          ? it.food.carbs_per_serving *
+                            macroScale(it.food, it.quantity)
+                          : 0),
                       0
                     );
                     const dayTotalF = allItems.reduce(
                       (s, it) =>
                         s +
-                        (it.food ? it.food.fat_per_serving * it.quantity : 0),
+                        (it.food
+                          ? it.food.fat_per_serving *
+                            macroScale(it.food, it.quantity)
+                          : 0),
                       0
                     );
                     return (
@@ -2258,7 +2878,6 @@ export default function Coach() {
                       </div>
                     );
                   })()}
-
                 <div
                   style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}
                 >
@@ -2275,9 +2894,7 @@ export default function Coach() {
                 </div>
               </>
             ) : planTab === "workout" ? (
-              // ── WORKOUT BUILDER ───────────────────────────────────────────────
               <>
-                {/* Copy Workout Plan banner */}
                 <div
                   style={{
                     display: "flex",
@@ -2294,19 +2911,33 @@ export default function Coach() {
                   <div style={{ fontSize: 13, color: "var(--muted)" }}>
                     📋{" "}
                     <span style={{ color: "var(--text)" }}>
-                      Reuse a plan from another day?
+                      Reuse or manage plans
                     </span>
                   </div>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    onClick={() => setShowCopyModal("workout")}
-                    disabled={planDates.size === 0}
-                    style={{ flexShrink: 0 }}
+                  <div
+                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
                   >
-                    Copy Workout Plan
-                  </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setShowCopyModal("workout")}
+                      disabled={planDates.size === 0}
+                    >
+                      Copy Plan
+                    </button>
+                    {workoutItems.length > 0 && (
+                      <button
+                        className="btn btn-sm"
+                        style={{
+                          background: "rgba(248,113,113,0.15)",
+                          color: "var(--red)",
+                        }}
+                        onClick={deleteWorkoutPlan}
+                      >
+                        🗑 Remove
+                      </button>
+                    )}
+                  </div>
                 </div>
-
                 {workoutItems.length === 0 && (
                   <div
                     className="card"
@@ -2468,8 +3099,318 @@ export default function Coach() {
                   </button>
                 </div>
               </>
+            ) : planTab === "goals" ? (
+              <>
+                <div className="card" style={{ marginBottom: "1.25rem" }}>
+                  <div
+                    className="section-title"
+                    style={{ marginBottom: "1rem" }}
+                  >
+                    🎯 Daily Macro Targets
+                  </div>
+                  <p
+                    style={{
+                      color: "var(--muted)",
+                      fontSize: 13,
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    Set daily nutrition goals for {selectedClient?.name}.
+                  </p>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "0.75rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    {[
+                      {
+                        key: "calories_target",
+                        label: "Calories (kcal)",
+                        color: "inherit",
+                        icon: "🔥",
+                      },
+                      {
+                        key: "protein_target",
+                        label: "Protein (g)",
+                        color: "#f87171",
+                        icon: "🥩",
+                      },
+                      {
+                        key: "carbs_target",
+                        label: "Carbs (g)",
+                        color: "#facc15",
+                        icon: "🍚",
+                      },
+                      {
+                        key: "fat_target",
+                        label: "Fat (g)",
+                        color: "var(--accent2)",
+                        icon: "🥑",
+                      },
+                    ].map(({ key, label, color, icon }) => (
+                      <div key={key}>
+                        <label
+                          className="label"
+                          style={{ color, fontSize: 12 }}
+                        >
+                          {icon} {label}
+                        </label>
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="0"
+                          value={(goalsForm as any)[key]}
+                          onChange={(e) =>
+                            setGoalsForm((prev) => ({
+                              ...prev,
+                              [key]: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                      padding: "0.75rem",
+                      background: "var(--surface2)",
+                      borderRadius: 10,
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <div
+                      onClick={() =>
+                        setGoalsForm((prev) => ({
+                          ...prev,
+                          show_macros_to_client: !prev.show_macros_to_client,
+                        }))
+                      }
+                      style={{
+                        width: 44,
+                        height: 24,
+                        borderRadius: 99,
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        background: goalsForm.show_macros_to_client
+                          ? "var(--accent)"
+                          : "var(--border)",
+                        position: "relative",
+                        transition: "background 0.2s",
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 3,
+                          left: goalsForm.show_macros_to_client ? 23 : 3,
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          transition: "left 0.2s",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>
+                        Show macro progress to client
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {goalsForm.show_macros_to_client
+                          ? "Client can see their macro rings"
+                          : "Macro rings hidden from client view"}
+                      </div>
+                    </div>
+                  </div>
+                  {clientGoals && (
+                    <div
+                      style={{
+                        background: "rgba(124,106,247,0.07)",
+                        border: "1px solid rgba(124,106,247,0.2)",
+                        borderRadius: 10,
+                        padding: "0.65rem 1rem",
+                        marginBottom: "1rem",
+                        fontSize: 13,
+                      }}
+                    >
+                      <span style={{ color: "var(--muted)" }}>Current: </span>
+                      <span style={{ fontWeight: 700 }}>
+                        {clientGoals.calories_target} kcal
+                      </span>
+                      {" · "}
+                      <span style={{ color: "#f87171" }}>
+                        P {clientGoals.protein_target}g
+                      </span>
+                      {" · "}
+                      <span style={{ color: "#facc15" }}>
+                        C {clientGoals.carbs_target}g
+                      </span>
+                      {" · "}
+                      <span style={{ color: "var(--accent2)" }}>
+                        F {clientGoals.fat_target}g
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    className="btn btn-primary"
+                    onClick={saveClientGoals}
+                    disabled={savingGoals}
+                  >
+                    {savingGoals ? "Saving…" : "💾 Save Goals"}
+                  </button>
+                </div>
+              </>
+            ) : planTab === "photos" ? (
+              // ── NEW: Weekly Progress Photos Tab ──
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: "1.25rem",
+                    flexWrap: "wrap",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <div>
+                    <h3 style={{ margin: 0 }}>📸 Weekly Progress Photos</h3>
+                    <p
+                      style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}
+                    >
+                      {weeklyPhotos.length} photo
+                      {weeklyPhotos.length !== 1 ? "s" : ""} uploaded by client
+                    </p>
+                  </div>
+                  {weeklyPhotos.length > 0 && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={downloadAllPhotos}
+                    >
+                      ⬇ Download All
+                    </button>
+                  )}
+                </div>
+                {loadingPhotos ? (
+                  <div style={{ textAlign: "center", padding: "3rem" }}>
+                    <div className="spinner" />
+                  </div>
+                ) : weeklyPhotos.length === 0 ? (
+                  <div
+                    className="card"
+                    style={{
+                      textAlign: "center",
+                      padding: "3rem",
+                      color: "var(--muted)",
+                    }}
+                  >
+                    Client hasn't uploaded any weekly photos yet.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fill, minmax(200px, 1fr))",
+                      gap: "1rem",
+                    }}
+                  >
+                    {weeklyPhotos.map((photo) => {
+                      const weekLabel = new Date(
+                        photo.week_start + "T00:00:00"
+                      ).toLocaleDateString("en-GB", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      });
+                      return (
+                        <div
+                          key={photo.id}
+                          className="card"
+                          style={{ padding: 0, overflow: "hidden" }}
+                        >
+                          <img
+                            src={photo.photo_url}
+                            alt={`Week of ${weekLabel}`}
+                            style={{
+                              width: "100%",
+                              height: 200,
+                              objectFit: "cover",
+                              display: "block",
+                              cursor: "pointer",
+                            }}
+                            onClick={() =>
+                              window.open(photo.photo_url, "_blank")
+                            }
+                          />
+                          <div style={{ padding: "0.65rem 0.75rem" }}>
+                            <div
+                              style={{
+                                fontWeight: 700,
+                                fontSize: 13,
+                                marginBottom: 2,
+                              }}
+                            >
+                              Week of {weekLabel}
+                            </div>
+                            {photo.notes && (
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: "var(--muted)",
+                                  marginBottom: "0.5rem",
+                                }}
+                              >
+                                {photo.notes}
+                              </div>
+                            )}
+                            <div style={{ display: "flex", gap: "0.4rem" }}>
+                              <button
+                                className="btn btn-outline btn-sm"
+                                style={{ flex: 1, fontSize: 12 }}
+                                onClick={() =>
+                                  downloadPhoto(
+                                    photo.photo_url,
+                                    `${selectedClient?.name ?? "client"}-week-${
+                                      photo.week_start
+                                    }.jpg`
+                                  )
+                                }
+                              >
+                                ⬇ Download
+                              </button>
+                              <button
+                                className="btn btn-sm"
+                                style={{
+                                  background: "rgba(124,106,247,0.15)",
+                                  color: "var(--accent)",
+                                  fontSize: 12,
+                                }}
+                                onClick={() =>
+                                  window.open(photo.photo_url, "_blank")
+                                }
+                              >
+                                🔍
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             ) : (
-              // ── CLIENT PROGRESS ───────────────────────────────────────────────
+              // Progress tab
               <>
                 <div
                   style={{
@@ -2653,6 +3594,182 @@ export default function Coach() {
           </>
         )}
 
+        {/* ── EXERCISE LIBRARY ── */}
+        {view === "exercises" && (
+          <>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: "1rem",
+                marginBottom: "1rem",
+              }}
+            >
+              <div>
+                <h2 style={{ margin: 0 }}>Exercise Library</h2>
+                <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
+                  {exercises.length} exercises
+                </p>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowAddExercise(true)}
+              >
+                + Add Exercise
+              </button>
+            </div>
+            <div style={{ marginBottom: "1rem" }}>
+              <input
+                className="input"
+                placeholder="Search exercises…"
+                value={exerciseSearch}
+                onChange={(e) => setExerciseSearch(e.target.value)}
+              />
+            </div>
+            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Muscle Group</th>
+                    <th>Notes</th>
+                    <th style={{ width: 52 }}>Del</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {exercises
+                    .filter(
+                      (e) =>
+                        !exerciseSearch ||
+                        e.name
+                          .toLowerCase()
+                          .includes(exerciseSearch.toLowerCase()) ||
+                        e.muscle_group
+                          .toLowerCase()
+                          .includes(exerciseSearch.toLowerCase())
+                    )
+                    .map((ex) => (
+                      <tr key={ex.id}>
+                        <td style={{ fontWeight: 500 }}>{ex.name}</td>
+                        <td style={{ color: "var(--muted)", fontSize: 12 }}>
+                          {ex.muscle_group || "—"}
+                        </td>
+                        <td style={{ color: "var(--muted)", fontSize: 12 }}>
+                          {ex.notes || "—"}
+                        </td>
+                        {/* ── NEW: Delete button ── */}
+                        <td>
+                          <button
+                            onClick={() => deleteExerciseItem(ex.id, ex.name)}
+                            style={{
+                              background: "rgba(248,113,113,0.15)",
+                              color: "var(--red)",
+                              border: "none",
+                              borderRadius: 6,
+                              padding: "4px 10px",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            {showAddExercise && (
+              <div
+                className="modal-backdrop"
+                onClick={() => setShowAddExercise(false)}
+              >
+                <div
+                  className="modal"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ maxWidth: 420, width: "95vw" }}
+                >
+                  <div className="modal-title">Add Exercise</div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.85rem",
+                    }}
+                  >
+                    <div>
+                      <label className="label">Exercise Name *</label>
+                      <input
+                        className="input"
+                        placeholder="e.g. Barbell Squat"
+                        value={newExercise.name}
+                        onChange={(e) =>
+                          setNewExercise((p) => ({
+                            ...p,
+                            name: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Muscle Group</label>
+                      <input
+                        className="input"
+                        placeholder="e.g. Legs, Chest, Back…"
+                        value={newExercise.muscle_group}
+                        onChange={(e) =>
+                          setNewExercise((p) => ({
+                            ...p,
+                            muscle_group: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Notes / Instructions</label>
+                      <input
+                        className="input"
+                        placeholder="e.g. Keep back straight"
+                        value={newExercise.notes}
+                        onChange={(e) =>
+                          setNewExercise((p) => ({
+                            ...p,
+                            notes: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.75rem",
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      <button
+                        className="btn btn-outline"
+                        onClick={() => setShowAddExercise(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleAddExercise}
+                        disabled={savingExercise || !newExercise.name.trim()}
+                      >
+                        {savingExercise ? "Adding…" : "Add Exercise"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {/* ── FOOD DATABASE ── */}
         {view === "foods" && (
           <>
@@ -2697,6 +3814,7 @@ export default function Coach() {
                     <th>Protein</th>
                     <th>Carbs</th>
                     <th>Fat</th>
+                    <th style={{ width: 52 }}>Del</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2716,6 +3834,24 @@ export default function Coach() {
                       <td style={{ color: "var(--accent2)" }}>
                         {f.fat_per_serving}g
                       </td>
+                      {/* ── NEW: Delete button ── */}
+                      <td>
+                        <button
+                          onClick={() => deleteFoodItem(f.id, f.name)}
+                          style={{
+                            background: "rgba(248,113,113,0.15)",
+                            color: "var(--red)",
+                            border: "none",
+                            borderRadius: 6,
+                            padding: "4px 10px",
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                          }}
+                        >
+                          🗑
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2725,7 +3861,6 @@ export default function Coach() {
         )}
       </main>
 
-      {/* Add Food Modal */}
       {showAddFood && (
         <AddFoodModal
           onClose={() => setShowAddFood(false)}
@@ -2733,7 +3868,6 @@ export default function Coach() {
         />
       )}
 
-      {/* Copy Plan Modal */}
       {showCopyModal && (
         <CopyPlanModal
           type={showCopyModal}
@@ -2745,6 +3879,17 @@ export default function Coach() {
               ? handleCopyDietPlan
               : handleCopyWorkoutPlan
           }
+        />
+      )}
+
+      {/* ── NEW: Chat overlay ── */}
+      {chatOpen && chatClientId && (
+        <Chat
+          clientId={chatClientId}
+          coachId={coachId}
+          senderType="coach"
+          peerName={chatClientName}
+          onClose={() => setChatOpen(false)}
         />
       )}
     </div>
