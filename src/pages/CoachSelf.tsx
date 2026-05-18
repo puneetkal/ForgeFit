@@ -820,17 +820,15 @@ export default function CoachSelf({
               100
           )
         : 0;
-    await supabase
-      .from("coach_progress_entries")
-      .upsert(
-        {
-          coach_id: coachId,
-          date: selectedDate,
-          diet_progress: dp,
-          workout_progress: wp,
-        },
-        { onConflict: "coach_id,date" }
-      );
+    await supabase.from("coach_progress_entries").upsert(
+      {
+        coach_id: coachId,
+        date: selectedDate,
+        diet_progress: dp,
+        workout_progress: wp,
+      },
+      { onConflict: "coach_id,date" }
+    );
     await loadProgress();
   }
 
@@ -865,17 +863,15 @@ export default function CoachSelf({
               100
           )
         : 0;
-    await supabase
-      .from("coach_progress_entries")
-      .upsert(
-        {
-          coach_id: coachId,
-          date: selectedDate,
-          diet_progress: dp,
-          workout_progress: wp,
-        },
-        { onConflict: "coach_id,date" }
-      );
+    await supabase.from("coach_progress_entries").upsert(
+      {
+        coach_id: coachId,
+        date: selectedDate,
+        diet_progress: dp,
+        workout_progress: wp,
+      },
+      { onConflict: "coach_id,date" }
+    );
     await loadProgress();
   }
 
@@ -951,16 +947,14 @@ export default function CoachSelf({
         .select()
         .single();
       if (mRow && m.items.length > 0) {
-        await supabase
-          .from("coach_meal_items")
-          .insert(
-            m.items.map((i) => ({
-              coach_meal_id: mRow.id,
-              food_id: i.food_id,
-              quantity: i.quantity,
-              unit: i.unit,
-            }))
-          );
+        await supabase.from("coach_meal_items").insert(
+          m.items.map((i) => ({
+            coach_meal_id: mRow.id,
+            food_id: i.food_id,
+            quantity: i.quantity,
+            unit: i.unit,
+          }))
+        );
       }
     }
 

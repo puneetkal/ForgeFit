@@ -1,13 +1,10 @@
-// Coach.tsx — Full rewrite with:
-// + Delete food/exercise from database
-// + Search and sort clients list
-// + Weekly progress photos tab
-// + WhatsApp-style chat overlay
+// Coach.tsx — Complete UI Rewrite
+// Matches new ForgeFit design system
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
-import CoachSelf from "../components/CoachSelf";
+import CoachSelf from "./CoachSelf";
 import Chat from "./Chat";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -24,7 +21,6 @@ interface ClientGoals {
   fat_target: number;
   show_macros_to_client: boolean;
 }
-
 interface ClientRow {
   id: string;
   name: string;
@@ -34,7 +30,6 @@ interface ClientRow {
   connection_code: string;
   coach_id: string | null;
 }
-
 interface Food {
   id: string;
   name: string;
@@ -45,26 +40,22 @@ interface Food {
   carbs_per_serving: number;
   fat_per_serving: number;
 }
-
 interface Exercise {
   id: string;
   name: string;
   muscle_group: string;
   notes: string;
 }
-
 interface MealItemDraft {
   food_id: string;
   quantity: number;
   unit: string;
   food?: Food;
 }
-
 interface MealDraft {
   meal_name: string;
   items: MealItemDraft[];
 }
-
 interface WorkoutItemDraft {
   exercise_id: string;
   sets: number;
@@ -72,7 +63,6 @@ interface WorkoutItemDraft {
   weight_kg: number | null;
   exercise?: Exercise;
 }
-
 interface ProgressEntry {
   id: string;
   date: string;
@@ -80,7 +70,6 @@ interface ProgressEntry {
   workout_progress: number;
   weight_kg: number | null;
 }
-
 interface WeeklyPhoto {
   id: string;
   client_id: string;
@@ -99,18 +88,16 @@ function todayStr() {
 }
 function pctColor(v: number) {
   if (v >= 80) return "var(--green)";
-  if (v >= 50) return "#facc15";
+  if (v >= 50) return "var(--yellow)";
   return "var(--red)";
 }
-function macroScale(food: Food, quantity: number): number {
-  return quantity / (food.serving_size || 1);
+function macroScale(food: Food, qty: number) {
+  return qty / (food.serving_size || 1);
 }
-function servingLabel(food: Food): string {
-  const sz = food.serving_size === 1 ? "" : `${food.serving_size} `;
-  return `${sz}${food.serving_unit}`;
+function servingLabel(f: Food) {
+  return `${f.serving_size === 1 ? "" : f.serving_size + " "}${f.serving_unit}`;
 }
-
-const SERVING_UNIT_SUGGESTIONS = [
+const SERVING_UNITS = [
   "g",
   "ml",
   "unit",
@@ -123,158 +110,6 @@ const SERVING_UNIT_SUGGESTIONS = [
   "bowl",
   "roti",
 ];
-
-// ── Hamburger Button ───────────────────────────────────────────────────────────
-function HamburgerBtn({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label="Open menu"
-      style={{
-        position: "fixed",
-        top: 14,
-        left: 14,
-        zIndex: 98,
-        width: 42,
-        height: 42,
-        borderRadius: 10,
-        background: "var(--surface2)",
-        border: "1px solid var(--border)",
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 5,
-        padding: 0,
-      }}
-    >
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          style={{
-            width: 18,
-            height: 2,
-            background: "white",
-            borderRadius: 1,
-            display: "block",
-          }}
-        />
-      ))}
-    </button>
-  );
-}
-
-// ── Weight Chart ───────────────────────────────────────────────────────────────
-function WeightChart({ entries }: { entries: ProgressEntry[] }) {
-  const data = entries
-    .filter((e) => e.weight_kg !== null)
-    .map((e) => ({ date: e.date, w: e.weight_kg as number }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-  if (data.length < 2)
-    return (
-      <div
-        style={{
-          textAlign: "center",
-          color: "var(--muted)",
-          padding: "1.5rem",
-          fontSize: 13,
-        }}
-      >
-        Need at least 2 weight entries to show a chart.
-      </div>
-    );
-  const W = 360,
-    H = 110,
-    padL = 34,
-    padR = 10,
-    padT = 10,
-    padB = 24,
-    cW = W - padL - padR,
-    cH = H - padT - padB;
-  const weights = data.map((d) => d.w),
-    minW = Math.min(...weights),
-    maxW = Math.max(...weights),
-    range = maxW - minW || 1;
-  const xp = (i: number) => padL + (i / Math.max(data.length - 1, 1)) * cW;
-  const yp = (w: number) => padT + ((maxW - w) / range) * cH;
-  const pts = data.map((d, i) => `${xp(i)},${yp(d.w)}`);
-  const fillPts = `${padL},${padT + cH} ${pts.join(" ")} ${xp(
-    data.length - 1
-  )},${padT + cH}`;
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      style={{
-        width: "100%",
-        height: "auto",
-        maxHeight: 120,
-        overflow: "visible",
-      }}
-    >
-      {[minW, (minW + maxW) / 2, maxW].map((w, i) => (
-        <g key={i}>
-          <line
-            x1={padL}
-            x2={W - padR}
-            y1={yp(w)}
-            y2={yp(w)}
-            stroke="var(--border)"
-            strokeWidth={0.5}
-            strokeDasharray="4,4"
-          />
-          <text
-            x={padL - 3}
-            y={yp(w) + 3.5}
-            fontSize={7}
-            fill="var(--muted)"
-            textAnchor="end"
-          >
-            {w.toFixed(1)}
-          </text>
-        </g>
-      ))}
-      <polygon points={fillPts} fill="var(--accent)" fillOpacity={0.08} />
-      <polyline
-        points={pts.join(" ")}
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth={2}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      {data.map((d, i) => (
-        <circle
-          key={i}
-          cx={xp(i)}
-          cy={yp(d.w)}
-          r={3.5}
-          fill="var(--accent)"
-          stroke="var(--bg,#0d0d18)"
-          strokeWidth={1.5}
-        />
-      ))}
-      <text
-        x={xp(0)}
-        y={H - 5}
-        fontSize={7}
-        fill="var(--muted)"
-        textAnchor="middle"
-      >
-        {data[0].date.slice(5).replace("-", "/")}
-      </text>
-      <text
-        x={xp(data.length - 1)}
-        y={H - 5}
-        fontSize={7}
-        fill="var(--muted)"
-        textAnchor="middle"
-      >
-        {data[data.length - 1].date.slice(5).replace("-", "/")}
-      </text>
-    </svg>
-  );
-}
 
 // ── Mini Calendar ──────────────────────────────────────────────────────────────
 const MONTHS = [
@@ -327,57 +162,21 @@ function MiniCalendar({
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let i = 1; i <= daysInMonth; i++) cells.push(i);
   return (
-    <div style={{ userSelect: "none" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "0.75rem",
-        }}
-      >
-        <button
-          className="btn btn-sm btn-outline"
-          style={{ padding: "2px 12px", fontSize: 18 }}
-          onClick={prev}
-        >
+    <div className="mini-cal">
+      <div className="mini-cal-nav">
+        <button className="btn btn-outline btn-xs" onClick={prev}>
           ‹
         </button>
-        <span
-          style={{
-            fontFamily: "Syne,sans-serif",
-            fontWeight: 700,
-            fontSize: 15,
-          }}
-        >
+        <span className="mcn-title">
           {MONTHS[vm]} {vy}
         </span>
-        <button
-          className="btn btn-sm btn-outline"
-          style={{ padding: "2px 12px", fontSize: 18 }}
-          onClick={next}
-        >
+        <button className="btn btn-outline btn-xs" onClick={next}>
           ›
         </button>
       </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(7,1fr)",
-          gap: 3,
-        }}
-      >
+      <div className="mini-cal-grid">
         {DOW.map((d) => (
-          <div
-            key={d}
-            style={{
-              fontSize: 10,
-              color: "var(--muted)",
-              textAlign: "center",
-              fontWeight: 600,
-              paddingBottom: 3,
-            }}
-          >
+          <div key={d} className="cal-dow">
             {d}
           </div>
         ))}
@@ -393,39 +192,12 @@ function MiniCalendar({
             <button
               key={i}
               onClick={() => onSelect(ds)}
-              style={{
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-                fontSize: 12,
-                padding: "5px 0",
-                position: "relative",
-                textAlign: "center",
-                background: isSel ? "var(--accent)" : "transparent",
-                color: isSel ? "#fff" : isToday ? "var(--accent)" : "inherit",
-                fontWeight: isSel || isToday ? 700 : 400,
-                outline: isToday && !isSel ? "2px solid var(--accent)" : "none",
-                outlineOffset: -2,
-              }}
+              className={`cal-cell${isSel ? " sel" : ""}${
+                isToday && !isSel ? " today" : ""
+              }`}
             >
               {day}
-              {hasPlan && (
-                <span
-                  style={{
-                    position: "absolute",
-                    bottom: 2,
-                    left: "50%",
-                    transform: "translateX(-50%)",
-                    width: 4,
-                    height: 4,
-                    borderRadius: "50%",
-                    background: isSel
-                      ? "rgba(255,255,255,0.7)"
-                      : "var(--accent2)",
-                    display: "block",
-                  }}
-                />
-              )}
+              {hasPlan && <span className="cal-dot" />}
             </button>
           );
         })}
@@ -433,14 +205,185 @@ function MiniCalendar({
       <div
         style={{
           display: "flex",
-          gap: "1rem",
-          marginTop: "0.6rem",
-          fontSize: 11,
+          gap: 12,
+          marginTop: 10,
+          fontSize: 10,
           color: "var(--muted)",
         }}
       >
         <span>● has plan</span>
         <span style={{ color: "var(--accent)" }}>■ selected</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Macro Rings ────────────────────────────────────────────────────────────────
+function Ring({
+  pct,
+  color,
+  size = 60,
+}: {
+  pct: number;
+  color: string;
+  size?: number;
+}) {
+  const r = (size - 8) / 2,
+    c = 2 * Math.PI * r;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="var(--surface2)"
+        strokeWidth={6}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth={6}
+        strokeDasharray={c}
+        strokeDashoffset={c - (pct / 100) * c}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: "stroke-dashoffset 0.5s" }}
+      />
+      <text
+        x={size / 2}
+        y={size / 2}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fill="currentColor"
+        fontSize={10}
+        fontWeight={700}
+        fontFamily="Outfit,sans-serif"
+      >
+        {pct}%
+      </text>
+    </svg>
+  );
+}
+
+function MacroRingsPreview({
+  meals,
+  goals,
+}: {
+  meals: MealDraft[];
+  goals: ClientGoals | null;
+}) {
+  if (!goals || goals.calories_target === 0) return null;
+  const all = meals.flatMap((m) => m.items);
+  const totCal = all.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.calories_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totP = all.reduce(
+    (s, i) =>
+      s +
+      (i.food
+        ? i.food.protein_per_serving * macroScale(i.food, i.quantity)
+        : 0),
+    0
+  );
+  const totC = all.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.carbs_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const totF = all.reduce(
+    (s, i) =>
+      s +
+      (i.food ? i.food.fat_per_serving * macroScale(i.food, i.quantity) : 0),
+    0
+  );
+  const macros = [
+    {
+      label: "Cal",
+      val: Math.round(totCal),
+      target: goals.calories_target,
+      unit: "kcal",
+      color: "#a78bfa",
+    },
+    {
+      label: "P",
+      val: Math.round(totP),
+      target: goals.protein_target,
+      unit: "g",
+      color: "#f87171",
+    },
+    {
+      label: "C",
+      val: Math.round(totC),
+      target: goals.carbs_target,
+      unit: "g",
+      color: "#fbbf24",
+    },
+    {
+      label: "F",
+      val: Math.round(totF),
+      target: goals.fat_target,
+      unit: "g",
+      color: "#34d399",
+    },
+  ];
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-title">
+        <span className="icon">📊</span>Plan Macros vs Targets
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4,1fr)",
+          gap: 8,
+        }}
+      >
+        {macros.map((m) => {
+          const pct =
+            m.target > 0
+              ? Math.min(100, Math.round((m.val / m.target) * 100))
+              : 0;
+          const over = m.val > m.target && m.target > 0;
+          return (
+            <div
+              key={m.label}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 5,
+              }}
+            >
+              <Ring pct={pct} color={over ? "var(--red)" : m.color} />
+              <div style={{ textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: over ? "var(--red)" : m.color,
+                  }}
+                >
+                  {m.val}
+                  {m.unit}
+                </div>
+                <div style={{ fontSize: 9, color: "var(--muted)" }}>
+                  {m.label} / {m.target}
+                  {m.unit}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -471,7 +414,7 @@ function AddFoodModal({
   onSave,
 }: {
   onClose: () => void;
-  onSave: (food: NewFoodState) => Promise<void>;
+  onSave: (f: NewFoodState) => Promise<void>;
 }) {
   const [form, setForm] = useState<NewFoodState>(EMPTY_FOOD);
   const [saving, setSaving] = useState(false);
@@ -480,10 +423,6 @@ function AddFoodModal({
     setForm((p) => ({ ...p, [k]: v }));
   }
   const previewCal = parseFloat(form.calories_per_serving) || 0;
-  const previewP = parseFloat(form.protein_per_serving) || 0;
-  const previewC = parseFloat(form.carbs_per_serving) || 0;
-  const previewF = parseFloat(form.fat_per_serving) || 0;
-  const servingDisplay = `${form.serving_size} ${form.serving_unit}`.trim();
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name || !form.serving_unit) return;
@@ -493,111 +432,82 @@ function AddFoodModal({
   }
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 480, width: "95vw" }}
-      >
-        <div className="modal-title">Add New Food</div>
+      <div className="modal-sheet-inner" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">➕ Add New Food</div>
         <form
           onSubmit={handleSave}
-          style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+          style={{ display: "flex", flexDirection: "column", gap: 14 }}
         >
           <div>
-            <label className="label">Food Name</label>
+            <label className="ff-label">Food Name</label>
             <input
-              className="input"
+              className="ff-input"
               required
-              placeholder="e.g. Egg, Peanut Butter, Brown Rice"
+              placeholder="e.g. Egg, Peanut Butter"
               value={form.name}
               onChange={(e) => set("name", e.target.value)}
             />
           </div>
           <div>
-            <label className="label">Serving Size</label>
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                alignItems: "flex-start",
-                flexWrap: "wrap",
-              }}
-            >
+            <label className="ff-label">Serving Size</label>
+            <div style={{ display: "flex", gap: 8 }}>
               <input
-                className="input"
+                className="ff-input"
                 type="number"
                 min="0.1"
                 step="0.1"
                 required
-                style={{ width: 90, flexShrink: 0 }}
-                placeholder="1"
+                style={{ width: 90 }}
                 value={form.serving_size}
                 onChange={(e) => set("serving_size", e.target.value)}
               />
-              <div style={{ flex: 1, minWidth: 160 }}>
-                {customUnit ? (
-                  <input
-                    className="input"
-                    placeholder="e.g. banana, roti, chapati"
-                    value={form.serving_unit}
-                    onChange={(e) => set("serving_unit", e.target.value)}
-                    autoFocus
-                  />
-                ) : (
-                  <select
-                    className="input"
-                    value={
-                      SERVING_UNIT_SUGGESTIONS.includes(form.serving_unit)
-                        ? form.serving_unit
-                        : "__custom"
-                    }
-                    onChange={(e) => {
-                      if (e.target.value === "__custom") {
-                        setCustomUnit(true);
-                        set("serving_unit", "");
-                      } else set("serving_unit", e.target.value);
-                    }}
-                  >
-                    {SERVING_UNIT_SUGGESTIONS.map((u) => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                    <option value="__custom">custom…</option>
-                  </select>
-                )}
-              </div>
-            </div>
-            <div
-              style={{
-                marginTop: "0.5rem",
-                fontSize: 12,
-                color: "var(--muted)",
-              }}
-            >
-              ℹ️ Enter macros for exactly{" "}
-              <strong style={{ color: "var(--text)" }}>
-                {servingDisplay || "1 serving"}
-              </strong>{" "}
-              below.
+              {customUnit ? (
+                <input
+                  className="ff-input"
+                  placeholder="custom unit"
+                  value={form.serving_unit}
+                  onChange={(e) => set("serving_unit", e.target.value)}
+                  autoFocus
+                />
+              ) : (
+                <select
+                  className="ff-input"
+                  value={
+                    SERVING_UNITS.includes(form.serving_unit)
+                      ? form.serving_unit
+                      : "__custom"
+                  }
+                  onChange={(e) => {
+                    if (e.target.value === "__custom") {
+                      setCustomUnit(true);
+                      set("serving_unit", "");
+                    } else set("serving_unit", e.target.value);
+                  }}
+                >
+                  {SERVING_UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                  <option value="__custom">custom…</option>
+                </select>
+              )}
             </div>
           </div>
           <div>
-            <label className="label">
-              Macros for 1 serving ({servingDisplay || "serving"})
-            </label>
+            <label className="ff-label">Macros per serving</label>
             <div
               style={{
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
-                gap: "0.6rem",
+                gap: 10,
               }}
             >
               {[
                 {
                   key: "calories_per_serving",
                   label: "Calories (kcal)",
-                  color: "inherit",
+                  color: "var(--text)",
                 },
                 {
                   key: "protein_per_serving",
@@ -607,7 +517,7 @@ function AddFoodModal({
                 {
                   key: "carbs_per_serving",
                   label: "Carbs (g)",
-                  color: "#facc15",
+                  color: "var(--yellow)",
                 },
                 {
                   key: "fat_per_serving",
@@ -616,11 +526,11 @@ function AddFoodModal({
                 },
               ].map(({ key, label, color }) => (
                 <div key={key}>
-                  <label className="label" style={{ color, fontSize: 11 }}>
+                  <label className="ff-label" style={{ color, fontSize: 10 }}>
                     {label}
                   </label>
                   <input
-                    className="input"
+                    className="ff-input ff-input-sm"
                     type="number"
                     min="0"
                     step="0.1"
@@ -640,202 +550,52 @@ function AddFoodModal({
               style={{
                 background: "var(--surface2)",
                 borderRadius: 10,
-                padding: "0.65rem 1rem",
+                padding: "10px 14px",
                 fontSize: 13,
                 display: "flex",
-                gap: "1rem",
+                gap: 10,
                 flexWrap: "wrap",
               }}
             >
               <span style={{ fontWeight: 700, color: "var(--accent)" }}>
-                Preview ({servingDisplay}):
+                Preview:
               </span>
               <span>{previewCal} kcal</span>
-              <span style={{ color: "#f87171" }}>P {previewP}g</span>
-              <span style={{ color: "#facc15" }}>C {previewC}g</span>
-              <span style={{ color: "var(--accent2)" }}>F {previewF}g</span>
+              <span style={{ color: "#f87171" }}>
+                P {parseFloat(form.protein_per_serving) || 0}g
+              </span>
+              <span style={{ color: "var(--yellow)" }}>
+                C {parseFloat(form.carbs_per_serving) || 0}g
+              </span>
+              <span style={{ color: "var(--accent2)" }}>
+                F {parseFloat(form.fat_per_serving) || 0}g
+              </span>
             </div>
           )}
           <div
             style={{
               display: "flex",
-              gap: "0.75rem",
+              gap: 10,
               justifyContent: "flex-end",
+              paddingTop: 4,
             }}
           >
-            <button type="button" className="btn btn-outline" onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={onClose}
+            >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={saving}
+            >
               {saving ? "Adding…" : "Add Food"}
             </button>
           </div>
         </form>
-      </div>
-    </div>
-  );
-}
-
-// ── Macro Rings for Client Diet Plan ──────────────────────────────────────────
-function ClientMacroRings({
-  meals,
-  goals,
-}: {
-  meals: MealDraft[];
-  goals: ClientGoals | null;
-}) {
-  if (!goals || goals.calories_target === 0) return null;
-  const allItems = meals.flatMap((m) => m.items);
-  const totCal = allItems.reduce(
-    (s, i) =>
-      s +
-      (i.food
-        ? i.food.calories_per_serving * macroScale(i.food, i.quantity)
-        : 0),
-    0
-  );
-  const totP = allItems.reduce(
-    (s, i) =>
-      s +
-      (i.food
-        ? i.food.protein_per_serving * macroScale(i.food, i.quantity)
-        : 0),
-    0
-  );
-  const totC = allItems.reduce(
-    (s, i) =>
-      s +
-      (i.food ? i.food.carbs_per_serving * macroScale(i.food, i.quantity) : 0),
-    0
-  );
-  const totF = allItems.reduce(
-    (s, i) =>
-      s +
-      (i.food ? i.food.fat_per_serving * macroScale(i.food, i.quantity) : 0),
-    0
-  );
-  const macros = [
-    {
-      label: "Calories",
-      val: Math.round(totCal),
-      target: goals.calories_target,
-      unit: "kcal",
-      color: "#a78bfa",
-    },
-    {
-      label: "Protein",
-      val: Math.round(totP),
-      target: goals.protein_target,
-      unit: "g",
-      color: "#f87171",
-    },
-    {
-      label: "Carbs",
-      val: Math.round(totC),
-      target: goals.carbs_target,
-      unit: "g",
-      color: "#facc15",
-    },
-    {
-      label: "Fat",
-      val: Math.round(totF),
-      target: goals.fat_target,
-      unit: "g",
-      color: "#34d399",
-    },
-  ];
-  return (
-    <div className="card" style={{ marginBottom: "1.25rem" }}>
-      <div
-        style={{
-          fontFamily: "Syne, sans-serif",
-          fontWeight: 700,
-          fontSize: 14,
-          marginBottom: "0.85rem",
-        }}
-      >
-        📊 Plan Macro Preview (vs client targets)
-      </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: "0.5rem",
-        }}
-      >
-        {macros.map(({ label, val, target, unit, color }) => {
-          const pct =
-            target > 0 ? Math.min(100, Math.round((val / target) * 100)) : 0;
-          const r = 24,
-            circ = 2 * Math.PI * r,
-            offset = circ - (pct / 100) * circ;
-          const over = val > target && target > 0;
-          return (
-            <div
-              key={label}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 4,
-              }}
-            >
-              <svg width={60} height={60} viewBox="0 0 60 60">
-                <circle
-                  cx={30}
-                  cy={30}
-                  r={r}
-                  fill="none"
-                  stroke="var(--surface2)"
-                  strokeWidth={5}
-                />
-                <circle
-                  cx={30}
-                  cy={30}
-                  r={r}
-                  fill="none"
-                  stroke={over ? "var(--red)" : color}
-                  strokeWidth={5}
-                  strokeDasharray={circ}
-                  strokeDashoffset={offset}
-                  strokeLinecap="round"
-                  transform="rotate(-90 30 30)"
-                  style={{ transition: "stroke-dashoffset 0.5s" }}
-                />
-                <text
-                  x={30}
-                  y={30}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill="currentColor"
-                  fontSize={10}
-                  fontWeight={700}
-                >
-                  {pct}%
-                </text>
-              </svg>
-              <div style={{ textAlign: "center" }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: over ? "var(--red)" : color,
-                  }}
-                >
-                  {val}
-                  {unit}
-                </div>
-                <div style={{ fontSize: 10, color: "var(--muted)" }}>
-                  {label}
-                </div>
-                <div style={{ fontSize: 10, color: "var(--muted)" }}>
-                  / {target}
-                  {unit}
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );
@@ -853,40 +613,29 @@ function CopyPlanModal({
   planDates: Set<string>;
   currentDate: string;
   onClose: () => void;
-  onCopy: (fromDate: string) => Promise<void>;
+  onCopy: (from: string) => Promise<void>;
 }) {
-  const availableDates = Array.from(planDates)
+  const avail = Array.from(planDates)
     .filter((d) => d !== currentDate)
     .sort((a, b) => b.localeCompare(a));
-  const [selected, setSelected] = useState<string>(availableDates[0] || "");
+  const [selected, setSelected] = useState(avail[0] || "");
   const [copying, setCopying] = useState(false);
-  async function handleCopy() {
+  async function go() {
     if (!selected) return;
     setCopying(true);
     await onCopy(selected);
     setCopying(false);
   }
-  const typeLabel = type === "diet" ? "Diet" : "Workout";
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 420, width: "95vw" }}
-      >
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-handle" />
         <div className="modal-title">
-          {type === "diet" ? "🥗" : "🏋️"} Copy {typeLabel} Plan
+          {type === "diet" ? "🥗" : "🏋️"} Copy{" "}
+          {type === "diet" ? "Diet" : "Workout"} Plan
         </div>
-        <p
-          style={{
-            color: "var(--muted)",
-            fontSize: 14,
-            marginBottom: "1.25rem",
-            marginTop: 0,
-          }}
-        >
-          Select a date to copy the {typeLabel.toLowerCase()} plan from. It will
-          replace the current plan for{" "}
+        <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 16 }}>
+          Paste into{" "}
           <strong style={{ color: "var(--accent)" }}>
             {new Date(currentDate + "T00:00:00").toLocaleDateString("en-GB", {
               weekday: "short",
@@ -894,133 +643,66 @@ function CopyPlanModal({
               month: "short",
             })}
           </strong>
-          .
+          . This will overwrite the current plan.
         </p>
-        {availableDates.length === 0 ? (
-          <div
-            style={{
-              background: "var(--surface2)",
-              borderRadius: 10,
-              padding: "1.5rem",
-              textAlign: "center",
-              color: "var(--muted)",
-              fontSize: 14,
-              marginBottom: "1rem",
-            }}
-          >
-            No other planned dates found.
+        {avail.length === 0 ? (
+          <div className="empty-state">
+            <div className="es-icon">📅</div>
+            <div className="es-title">No other dates</div>
           </div>
         ) : (
           <div
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: "0.4rem",
+              gap: 8,
               maxHeight: 280,
               overflowY: "auto",
-              marginBottom: "1.25rem",
+              marginBottom: 14,
             }}
           >
-            {availableDates.map((date) => {
-              const display = new Date(date + "T00:00:00").toLocaleDateString(
-                "en-GB",
-                {
-                  weekday: "long",
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                }
-              );
-              const isSelected = date === selected;
-              return (
-                <button
-                  key={date}
-                  onClick={() => setSelected(date)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.75rem",
-                    padding: "0.65rem 0.9rem",
-                    borderRadius: 10,
-                    cursor: "pointer",
-                    textAlign: "left",
-                    color: "inherit",
-                    border: isSelected
-                      ? "2px solid var(--accent)"
-                      : "1px solid var(--border)",
-                    background: isSelected
-                      ? "rgba(124,106,247,0.1)"
-                      : "var(--surface2)",
-                  }}
-                >
-                  <span
+            {avail.map((date) => (
+              <button
+                key={date}
+                onClick={() => setSelected(date)}
+                className={`copy-date-btn${
+                  date === selected ? " selected" : ""
+                }`}
+              >
+                <div
+                  className={`copy-radio${date === selected ? " sel" : ""}`}
+                />
+                <div>
+                  <div
                     style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: "50%",
-                      flexShrink: 0,
-                      border: isSelected
-                        ? "5px solid var(--accent)"
-                        : "2px solid var(--border)",
-                      background: isSelected ? "var(--accent)" : "transparent",
+                      fontWeight: date === selected ? 700 : 400,
+                      fontSize: 14,
                     }}
-                  />
-                  <div>
-                    <div
-                      style={{
-                        fontWeight: isSelected ? 700 : 400,
-                        fontSize: 14,
-                      }}
-                    >
-                      {display}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--muted)",
-                        marginTop: 1,
-                      }}
-                    >
-                      {date}
-                    </div>
+                  >
+                    {new Date(date + "T00:00:00").toLocaleDateString("en-GB", {
+                      weekday: "long",
+                      day: "numeric",
+                      month: "long",
+                    })}
                   </div>
-                </button>
-              );
-            })}
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                    {date}
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
         )}
-        {availableDates.length > 0 && (
-          <div
-            style={{
-              background: "rgba(248,113,113,0.08)",
-              border: "1px solid rgba(248,113,113,0.2)",
-              borderRadius: 8,
-              padding: "0.6rem 0.9rem",
-              fontSize: 12,
-              color: "#f87171",
-              marginBottom: "1.25rem",
-            }}
-          >
-            ⚠️ This will overwrite the existing {typeLabel.toLowerCase()} plan
-            for the selected date.
-          </div>
-        )}
-        <div
-          style={{
-            display: "flex",
-            gap: "0.75rem",
-            justifyContent: "flex-end",
-          }}
-        >
-          <button className="btn btn-outline" onClick={onClose}>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn btn-outline btn-sm" onClick={onClose}>
             Cancel
           </button>
           <button
-            className="btn btn-primary"
-            onClick={handleCopy}
-            disabled={copying || !selected || availableDates.length === 0}
+            className="btn btn-primary btn-sm"
+            onClick={go}
+            disabled={copying || !selected || !avail.length}
           >
-            {copying ? "Copying…" : `Copy ${typeLabel} Plan`}
+            {copying ? "Copying…" : `Copy Plan`}
           </button>
         </div>
       </div>
@@ -1028,7 +710,118 @@ function CopyPlanModal({
   );
 }
 
-// ── Coach Component ────────────────────────────────────────────────────────────
+// ── Weight Chart ───────────────────────────────────────────────────────────────
+function WeightChart({ entries }: { entries: ProgressEntry[] }) {
+  const data = entries
+    .filter((e) => e.weight_kg !== null)
+    .map((e) => ({ date: e.date, w: e.weight_kg as number }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (data.length < 2)
+    return (
+      <div
+        style={{
+          textAlign: "center",
+          color: "var(--muted)",
+          padding: "20px",
+          fontSize: 13,
+        }}
+      >
+        Need at least 2 weight entries.
+      </div>
+    );
+  const W = 340,
+    H = 100,
+    pL = 30,
+    pR = 8,
+    pT = 8,
+    pB = 20;
+  const cW = W - pL - pR,
+    cH = H - pT - pB;
+  const ws = data.map((d) => d.w),
+    minW = Math.min(...ws),
+    maxW = Math.max(...ws),
+    range = maxW - minW || 1;
+  const xp = (i: number) => pL + (i / Math.max(data.length - 1, 1)) * cW;
+  const yp = (w: number) => pT + ((maxW - w) / range) * cH;
+  const pts = data.map((d, i) => `${xp(i)},${yp(d.w)}`);
+  const fill = `${pL},${pT + cH} ${pts.join(" ")} ${xp(data.length - 1)},${
+    pT + cH
+  }`;
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{
+        width: "100%",
+        height: "auto",
+        maxHeight: 110,
+        overflow: "visible",
+      }}
+    >
+      {[minW, (minW + maxW) / 2, maxW].map((w, i) => (
+        <g key={i}>
+          <line
+            x1={pL}
+            x2={W - pR}
+            y1={yp(w)}
+            y2={yp(w)}
+            stroke="var(--border)"
+            strokeWidth={0.5}
+            strokeDasharray="4,3"
+          />
+          <text
+            x={pL - 3}
+            y={yp(w) + 3}
+            fontSize={7}
+            fill="var(--muted)"
+            textAnchor="end"
+          >
+            {w.toFixed(1)}
+          </text>
+        </g>
+      ))}
+      <polygon points={fill} fill="var(--accent)" fillOpacity={0.08} />
+      <polyline
+        points={pts.join(" ")}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth={2}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      {data.map((d, i) => (
+        <circle
+          key={i}
+          cx={xp(i)}
+          cy={yp(d.w)}
+          r={3}
+          fill="var(--accent)"
+          stroke="var(--bg)"
+          strokeWidth={1.5}
+        />
+      ))}
+      <text
+        x={xp(0)}
+        y={H - 4}
+        fontSize={7}
+        fill="var(--muted)"
+        textAnchor="middle"
+      >
+        {data[0].date.slice(5).replace("-", "/")}
+      </text>
+      <text
+        x={xp(data.length - 1)}
+        y={H - 4}
+        fontSize={7}
+        fill="var(--muted)"
+        textAnchor="middle"
+      >
+        {data[data.length - 1].date.slice(5).replace("-", "/")}
+      </text>
+    </svg>
+  );
+}
+
+// ── Main Coach Component ───────────────────────────────────────────────────────
 export default function Coach() {
   const nav = useNavigate();
   const coachId = localStorage.getItem("coach_id") || "";
@@ -1052,21 +845,17 @@ export default function Coach() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [planTab, setPlanTab] = useState<PlanTab>("diet");
   const [planDates, setPlanDates] = useState<Set<string>>(new Set());
-  const [calendarOpen, setCalendarOpen] = useState(true);
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   const [meals, setMeals] = useState<MealDraft[]>([]);
   const [dietNote, setDietNote] = useState("");
   const [savingDiet, setSavingDiet] = useState(false);
-
   const [workoutItems, setWorkoutItems] = useState<WorkoutItemDraft[]>([]);
   const [savingWorkout, setSavingWorkout] = useState(false);
-
   const [clientProgress, setClientProgress] = useState<ProgressEntry[]>([]);
-
   const [showAddFood, setShowAddFood] = useState(false);
   const [foodSearch, setFoodSearch] = useState("");
   const [showCopyModal, setShowCopyModal] = useState<CopyPlanType | null>(null);
-
   const [clientGoals, setClientGoals] = useState<ClientGoals | null>(null);
   const [goalsForm, setGoalsForm] = useState({
     calories_target: "",
@@ -1076,7 +865,6 @@ export default function Coach() {
     show_macros_to_client: false,
   });
   const [savingGoals, setSavingGoals] = useState(false);
-
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [exerciseSearch, setExerciseSearch] = useState("");
   const [newExercise, setNewExercise] = useState({
@@ -1085,16 +873,10 @@ export default function Coach() {
     notes: "",
   });
   const [savingExercise, setSavingExercise] = useState(false);
-
-  // ── NEW: Client search / sort ──────────────────────────────────────────────
   const [clientSearch, setClientSearch] = useState("");
   const [clientSort, setClientSort] = useState<"name" | "recent">("name");
-
-  // ── NEW: Weekly photos ─────────────────────────────────────────────────────
   const [weeklyPhotos, setWeeklyPhotos] = useState<WeeklyPhoto[]>([]);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
-
-  // ── NEW: Chat overlay ──────────────────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(false);
   const [chatClientId, setChatClientId] = useState("");
   const [chatClientName, setChatClientName] = useState("");
@@ -1162,7 +944,6 @@ export default function Coach() {
       setDietNote("");
       setMeals([]);
     }
-
     const { data: wpd } = await supabase
       .from("workout_plan_days")
       .select("*, workout_day_items(*, exercises(*))")
@@ -1182,9 +963,7 @@ export default function Coach() {
           exercise: i.exercises,
         }))
       );
-    } else {
-      setWorkoutItems([]);
-    }
+    } else setWorkoutItems([]);
     setLoadingPlan(false);
   }
 
@@ -1225,7 +1004,6 @@ export default function Coach() {
     }
   }
 
-  // ── NEW: Load weekly progress photos ──────────────────────────────────────
   async function loadWeeklyPhotos(clientId: string) {
     setLoadingPhotos(true);
     const { data } = await supabase
@@ -1237,7 +1015,6 @@ export default function Coach() {
     setLoadingPhotos(false);
   }
 
-  // ── NEW: Download single photo ─────────────────────────────────────────────
   async function downloadPhoto(url: string, filename: string) {
     try {
       const res = await fetch(url);
@@ -1252,59 +1029,29 @@ export default function Coach() {
     }
   }
 
-  // ── NEW: Download all photos ───────────────────────────────────────────────
-  async function downloadAllPhotos() {
-    if (!weeklyPhotos.length) return;
-    for (let i = 0; i < weeklyPhotos.length; i++) {
-      const p = weeklyPhotos[i];
-      await downloadPhoto(
-        p.photo_url,
-        `${selectedClient?.name ?? "client"}-week-${p.week_start}.jpg`
-      );
-      if (i < weeklyPhotos.length - 1)
-        await new Promise((r) => setTimeout(r, 600));
-    }
-    flash("All photos downloaded!");
-  }
-
-  // ── NEW: Delete food item ──────────────────────────────────────────────────
-  async function deleteFoodItem(foodId: string, foodName: string) {
-    if (
-      !confirm(
-        `Delete "${foodName}" from the food database?\nThis cannot be undone and may affect existing plans.`
-      )
-    )
-      return;
-    const { error: de } = await supabase
-      .from("foods")
-      .delete()
-      .eq("id", foodId);
+  async function deleteFood(id: string, name: string) {
+    if (!confirm(`Delete "${name}"? This may affect existing plans.`)) return;
+    const { error: de } = await supabase.from("foods").delete().eq("id", id);
     if (de) {
       setError(de.message);
       return;
     }
-    setFoods((prev) => prev.filter((f) => f.id !== foodId));
-    flash(`"${foodName}" deleted.`);
+    setFoods((prev) => prev.filter((f) => f.id !== id));
+    flash(`"${name}" deleted.`);
   }
 
-  // ── NEW: Delete exercise item ──────────────────────────────────────────────
-  async function deleteExerciseItem(exerciseId: string, exerciseName: string) {
-    if (
-      !confirm(
-        `Delete "${exerciseName}" from the exercise library?\nThis cannot be undone and may affect existing workout plans.`
-      )
-    )
-      return;
+  async function deleteExercise(id: string, name: string) {
+    if (!confirm(`Delete "${name}" from exercise library?`)) return;
     const { error: de } = await supabase
       .from("exercises")
       .delete()
-      .eq("id", exerciseId);
+      .eq("id", id);
     if (de) {
       setError(de.message);
       return;
     }
-    setExercises((prev) => prev.filter((e) => e.id !== exerciseId));
-    flash(`"${exerciseName}" deleted.`);
+    setExercises((prev) => prev.filter((e) => e.id !== id));
+    flash(`"${name}" deleted.`);
   }
 
   async function saveClientGoals() {
@@ -1343,7 +1090,7 @@ export default function Coach() {
       loadPlanForDate(c.id, today),
       loadClientProgress(c.id),
       loadClientGoals(c.id),
-      loadWeeklyPhotos(c.id), // ← NEW
+      loadWeeklyPhotos(c.id),
     ]);
   }
 
@@ -1434,18 +1181,15 @@ export default function Coach() {
         })
         .select()
         .single();
-      if (mRow && m.items.length > 0) {
-        await supabase
-          .from("meal_items")
-          .insert(
-            m.items.map((i) => ({
-              meal_id: mRow.id,
-              food_id: i.food_id,
-              quantity: i.quantity,
-              unit: i.unit,
-            }))
-          );
-      }
+      if (mRow && m.items.length > 0)
+        await supabase.from("meal_items").insert(
+          m.items.map((i) => ({
+            meal_id: mRow.id,
+            food_id: i.food_id,
+            quantity: i.quantity,
+            unit: i.unit,
+          }))
+        );
     }
     setPlanDates((prev) => new Set([...prev, selectedDate]));
     flash("Diet plan saved!");
@@ -1453,15 +1197,7 @@ export default function Coach() {
   }
 
   async function deleteDietPlan() {
-    if (!selectedClient) return;
-    if (
-      !confirm(
-        `Delete diet plan for ${new Date(
-          selectedDate + "T00:00:00"
-        ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}?`
-      )
-    )
-      return;
+    if (!selectedClient || !confirm("Delete this diet plan?")) return;
     const { data: pd } = await supabase
       .from("plan_days")
       .select("id")
@@ -1469,17 +1205,17 @@ export default function Coach() {
       .eq("plan_date", selectedDate)
       .maybeSingle();
     if (pd) {
-      const { data: oldMeals } = await supabase
+      const { data: om } = await supabase
         .from("meals")
         .select("id")
         .eq("plan_day_id", pd.id);
-      if (oldMeals?.length) {
+      if (om?.length) {
         await supabase
           .from("meal_items")
           .delete()
           .in(
             "meal_id",
-            oldMeals.map((m: any) => m.id)
+            om.map((m: any) => m.id)
           );
         await supabase.from("meals").delete().eq("plan_day_id", pd.id);
       }
@@ -1520,35 +1256,24 @@ export default function Coach() {
       .from("workout_day_items")
       .delete()
       .eq("workout_plan_day_id", wpd.id);
-    if (workoutItems.length > 0) {
-      await supabase
-        .from("workout_day_items")
-        .insert(
-          workoutItems.map((i, idx) => ({
-            workout_plan_day_id: wpd.id,
-            exercise_id: i.exercise_id,
-            sets: i.sets,
-            reps: i.reps,
-            weight_kg: i.weight_kg || null,
-            display_order: idx + 1,
-          }))
-        );
-    }
+    if (workoutItems.length > 0)
+      await supabase.from("workout_day_items").insert(
+        workoutItems.map((i, idx) => ({
+          workout_plan_day_id: wpd.id,
+          exercise_id: i.exercise_id,
+          sets: i.sets,
+          reps: i.reps,
+          weight_kg: i.weight_kg || null,
+          display_order: idx + 1,
+        }))
+      );
     setPlanDates((prev) => new Set([...prev, selectedDate]));
     flash("Workout plan saved!");
     setSavingWorkout(false);
   }
 
   async function deleteWorkoutPlan() {
-    if (!selectedClient) return;
-    if (
-      !confirm(
-        `Delete workout plan for ${new Date(
-          selectedDate + "T00:00:00"
-        ).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}?`
-      )
-    )
-      return;
+    if (!selectedClient || !confirm("Delete this workout plan?")) return;
     const { data: wpd } = await supabase
       .from("workout_plan_days")
       .select("id")
@@ -1605,7 +1330,7 @@ export default function Coach() {
       `✓ Diet copied from ${new Date(fromDate + "T00:00:00").toLocaleDateString(
         "en-GB",
         { day: "numeric", month: "short" }
-      )} — remember to save!`
+      )} — save to confirm!`
     );
   }
 
@@ -1618,7 +1343,7 @@ export default function Coach() {
       .eq("plan_date", fromDate)
       .maybeSingle();
     if (!wpd) {
-      setError("No workout plan found for that date.");
+      setError("No workout plan for that date.");
       setShowCopyModal(null);
       return;
     }
@@ -1635,14 +1360,7 @@ export default function Coach() {
       }))
     );
     setShowCopyModal(null);
-    flash(
-      `✓ Workout copied from ${new Date(
-        fromDate + "T00:00:00"
-      ).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-      })} — remember to save!`
-    );
+    flash(`✓ Workout copied — save to confirm!`);
   }
 
   async function handleAddFood(form: NewFoodState) {
@@ -1682,9 +1400,8 @@ export default function Coach() {
       })
       .select()
       .single();
-    if (ee) {
-      setError(ee.message);
-    } else {
+    if (ee) setError(ee.message);
+    else {
       setExercises((prev) =>
         [...prev, data].sort((a, b) => a.name.localeCompare(b.name))
       );
@@ -1709,7 +1426,6 @@ export default function Coach() {
     "Pre-Workout",
     "Post-Workout",
   ];
-
   function addMeal() {
     setMeals((prev) => [
       ...prev,
@@ -1793,7 +1509,6 @@ export default function Coach() {
       })
     );
   }
-
   function handleLogout() {
     localStorage.clear();
     supabase.auth.signOut();
@@ -1817,8 +1532,7 @@ export default function Coach() {
         <div className="spinner" />
       </div>
     );
-
-  if (showSelfJourney) {
+  if (showSelfJourney)
     return (
       <CoachSelf
         coachId={coachId}
@@ -1828,7 +1542,6 @@ export default function Coach() {
         onClose={() => setShowSelfJourney(false)}
       />
     );
-  }
 
   const selDateDisplay = new Date(
     selectedDate + "T00:00:00"
@@ -1854,8 +1567,6 @@ export default function Coach() {
     (f) =>
       !foodSearch || f.name.toLowerCase().includes(foodSearch.toLowerCase())
   );
-
-  // ── NEW: Filtered + sorted clients ────────────────────────────────────────
   const filteredClients = clients
     .filter(
       (c) =>
@@ -1867,64 +1578,28 @@ export default function Coach() {
         ? a.name.localeCompare(b.name)
         : b.weight_kg - a.weight_kg
     );
+  const initials =
+    coachName
+      .split(" ")
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2) || "C";
 
   return (
-    <div style={{ minHeight: "100vh" }}>
+    <div className="coach-shell" style={{ minHeight: "100vh" }}>
+      {/* Sidebar overlay */}
       {sidebarOpen && (
         <div
+          className="sidebar-overlay"
           onClick={() => setSidebarOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.65)",
-            zIndex: 99,
-            backdropFilter: "blur(2px)",
-          }}
         />
       )}
-
-      <aside
-        className="sidebar"
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          height: "100vh",
-          width: 240,
-          zIndex: 100,
-          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-          transition: "transform 0.25s cubic-bezier(0.4,0,0.2,1)",
-          display: "flex",
-          flexDirection: "column",
-          overflowY: "auto",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "1.25rem 1rem 0.75rem",
-          }}
-        >
-          <div className="sidebar-logo" style={{ margin: 0 }}>
-            ForgeFit
-          </div>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            style={{
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
-              color: "var(--muted)",
-              fontSize: 20,
-              padding: 4,
-            }}
-          >
-            ✕
-          </button>
+      <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
+        <div className="sidebar-logo">
+          Forge<span>Fit</span>
         </div>
-        <div style={{ padding: "0 0.75rem 0.75rem" }}>
+        <div style={{ padding: "0 10px 12px" }}>
           <button
             onClick={() => {
               setShowSelfJourney(true);
@@ -1932,88 +1607,112 @@ export default function Coach() {
             }}
             style={{
               width: "100%",
-              padding: "0.65rem 0.85rem",
+              padding: "10px 14px",
               borderRadius: 12,
-              background:
-                "linear-gradient(135deg, var(--accent) 0%, #a855f7 100%)",
+              background: "linear-gradient(135deg, var(--accent), #a855f7)",
               border: "none",
               color: "#fff",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
-              gap: "0.65rem",
-              fontFamily: "Syne, sans-serif",
+              gap: 10,
+              fontFamily: "var(--font)",
               fontWeight: 700,
               fontSize: 13,
-              boxShadow: "0 4px 14px rgba(124,106,247,0.35)",
+              boxShadow: "0 4px 14px var(--accent-glow)",
             }}
           >
-            <span style={{ fontSize: 18 }}>🏅</span>
+            <span style={{ fontSize: 20 }}>🏅</span>
             <div style={{ textAlign: "left" }}>
               <div>My Journey</div>
-              <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>
+              <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.8 }}>
                 Track your own fitness
               </div>
             </div>
           </button>
         </div>
-        <nav style={{ flex: 1, padding: "0.5rem" }}>
-          <button
-            className={`sidebar-item ${view === "clients" ? "active" : ""}`}
-            style={{ width: "100%" }}
-            onClick={() => navTo("clients")}
-          >
-            👥 My Clients
-          </button>
-          <button
-            className={`sidebar-item ${view === "foods" ? "active" : ""}`}
-            style={{ width: "100%" }}
-            onClick={() => navTo("foods")}
-          >
-            🥑 Food Database
-          </button>
-          <button
-            className={`sidebar-item ${view === "exercises" ? "active" : ""}`}
-            style={{ width: "100%" }}
-            onClick={() => navTo("exercises")}
-          >
-            🏃 Exercise Library
-          </button>
+        <nav className="sidebar-nav">
+          {(
+            [
+              { id: "clients", icon: "👥", label: "My Clients" },
+              { id: "foods", icon: "🥑", label: "Food Database" },
+              { id: "exercises", icon: "🏃", label: "Exercise Library" },
+            ] as { id: CoachView; icon: string; label: string }[]
+          ).map((item) => (
+            <button
+              key={item.id}
+              className={`sidebar-item${view === item.id ? " active" : ""}`}
+              onClick={() => navTo(item.id)}
+            >
+              <span className="si-icon">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
         </nav>
-        <div
-          style={{
-            padding: "1rem 0.5rem",
-            borderTop: "1px solid var(--border)",
-          }}
-        >
+        <div className="sidebar-bottom">
+          <div className="sidebar-profile">
+            <div className="sidebar-avatar">{initials}</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{coachName}</div>
+          </div>
           <button
             className="sidebar-item"
-            style={{ width: "100%", color: "var(--red)" }}
+            style={{ color: "var(--red)", width: "100%" }}
             onClick={handleLogout}
           >
-            ⎋ Logout
+            <span className="si-icon">⎋</span>Logout
           </button>
         </div>
       </aside>
 
-      <HamburgerBtn onClick={() => setSidebarOpen(true)} />
+      {/* Top bar */}
+      <header className="coach-top-bar">
+        <button className="hamburger-btn" onClick={() => setSidebarOpen(true)}>
+          <span />
+          <span />
+          <span />
+        </button>
+        <div
+          style={{
+            flex: 1,
+            fontSize: 17,
+            fontWeight: 800,
+            letterSpacing: "-0.03em",
+          }}
+        >
+          {view === "clients"
+            ? "My Clients"
+            : view === "client_detail" && selectedClient
+            ? selectedClient.name
+            : view === "foods"
+            ? "Food Database"
+            : "Exercise Library"}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {view === "client_detail" && selectedClient && (
+            <button
+              className="icon-btn"
+              onClick={() => {
+                setChatClientId(selectedClient.id);
+                setChatClientName(selectedClient.name);
+                setChatOpen(true);
+              }}
+            >
+              💬
+            </button>
+          )}
+          <div className="avatar-btn">{initials}</div>
+        </div>
+      </header>
 
-      <main
-        style={{ padding: "4.5rem 1rem 3rem", maxWidth: 720, margin: "0 auto" }}
-      >
-        {msg && (
-          <div className="alert alert-success" style={{ marginBottom: "1rem" }}>
-            {msg}
-          </div>
-        )}
+      <main style={{ padding: "0 16px 40px" }}>
+        {msg && <div className="alert alert-success">{msg}</div>}
         {error && (
           <div
             className="alert alert-error"
             style={{
-              marginBottom: "1rem",
+              cursor: "pointer",
               display: "flex",
               justifyContent: "space-between",
-              cursor: "pointer",
             }}
             onClick={() => setError("")}
           >
@@ -2022,34 +1721,24 @@ export default function Coach() {
           </div>
         )}
 
-        {/* ── CLIENTS VIEW ── */}
+        {/* ── CLIENTS ── */}
         {view === "clients" && (
-          <>
-            <div className="main-header">
-              <h2>My Clients</h2>
-              <p>
-                {clients.length} connected client
-                {clients.length !== 1 ? "s" : ""}
-              </p>
-            </div>
-
-            {/* Coach self journey card */}
+          <div className="page-enter">
+            {/* Coach self card */}
             <div
               onClick={() => setShowSelfJourney(true)}
               style={{
-                background:
-                  "linear-gradient(135deg, rgba(124,106,247,0.15) 0%, rgba(168,85,247,0.1) 100%)",
-                border: "2px solid var(--accent)",
-                borderRadius: 14,
-                padding: "1rem 1.25rem",
-                marginBottom: "1.5rem",
-                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                gap: "1rem",
+                gap: 14,
+                padding: 16,
+                background:
+                  "linear-gradient(135deg, rgba(124,106,247,0.15), rgba(168,85,247,0.1))",
+                border: "2px solid var(--accent)",
+                borderRadius: 16,
+                cursor: "pointer",
+                marginBottom: 16,
                 transition: "all 0.15s",
-                position: "relative",
-                overflow: "hidden",
               }}
               onMouseEnter={(e) =>
                 (e.currentTarget.style.transform = "translateY(-1px)")
@@ -2058,30 +1747,16 @@ export default function Coach() {
             >
               <div
                 style={{
-                  position: "absolute",
-                  top: -20,
-                  right: -20,
-                  width: 80,
-                  height: 80,
-                  borderRadius: "50%",
-                  background: "var(--accent)",
-                  opacity: 0.08,
-                  filter: "blur(20px)",
-                }}
-              />
-              <div
-                style={{
-                  width: 52,
-                  height: 52,
+                  width: 50,
+                  height: 50,
                   borderRadius: 14,
-                  flexShrink: 0,
-                  background:
-                    "linear-gradient(135deg, var(--accent) 0%, #a855f7 100%)",
+                  background: "linear-gradient(135deg, var(--accent), #a855f7)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 24,
-                  boxShadow: "0 4px 14px rgba(124,106,247,0.4)",
+                  fontSize: 22,
+                  flexShrink: 0,
+                  boxShadow: "0 4px 14px var(--accent-glow)",
                 }}
               >
                 🏅
@@ -2089,68 +1764,47 @@ export default function Coach() {
               <div style={{ flex: 1 }}>
                 <div
                   style={{
-                    fontFamily: "Syne, sans-serif",
                     fontWeight: 800,
-                    fontSize: "1.05rem",
+                    fontSize: 15,
                     color: "var(--accent)",
                   }}
                 >
-                  {coachName}
-                  <span
-                    style={{
-                      marginLeft: "0.5rem",
-                      fontSize: 11,
-                      fontWeight: 500,
-                      background: "var(--accent)",
-                      color: "#fff",
-                      padding: "2px 8px",
-                      borderRadius: 20,
-                    }}
-                  >
+                  {coachName}{" "}
+                  <span className="badge badge-accent" style={{ fontSize: 10 }}>
                     YOU
                   </span>
                 </div>
                 <div
-                  style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}
+                  style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}
                 >
                   Track your own diet, workouts & progress
                 </div>
               </div>
-              <div
-                style={{
-                  padding: "0.4rem 0.9rem",
-                  borderRadius: 8,
-                  background: "var(--accent)",
-                  color: "#fff",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  flexShrink: 0,
-                }}
-              >
-                Open →
-              </div>
+              <div className="btn btn-primary btn-sm">Open →</div>
             </div>
-
-            {/* Connect client */}
-            <div className="card" style={{ marginBottom: "1.5rem" }}>
-              <div className="section-title">Connect a Client</div>
+            {/* Connect */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-title">
+                <span className="icon">🔗</span>Connect a Client
+              </div>
               <p
                 style={{
-                  color: "var(--muted)",
-                  fontSize: 14,
-                  marginBottom: "1rem",
+                  color: "var(--text2)",
+                  fontSize: 13,
+                  marginBottom: 12,
                 }}
               >
-                Enter the 6-character code from your client's signup.
+                Enter the 6-character code from your client.
               </p>
-              <div style={{ display: "flex", gap: "0.75rem" }}>
+              <div style={{ display: "flex", gap: 10 }}>
                 <input
-                  className="input"
+                  className="ff-input"
                   style={{
                     textTransform: "uppercase",
                     letterSpacing: "0.2em",
                     fontSize: "1.1rem",
                     flex: 1,
+                    fontFamily: "var(--font-mono)",
                   }}
                   placeholder="ABC123"
                   maxLength={6}
@@ -2171,128 +1825,69 @@ export default function Coach() {
                 </button>
               </div>
             </div>
-
-            {/* ── NEW: Search + Sort bar ── */}
+            {/* Search/sort */}
             {clients.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginBottom: "1rem",
-                  flexWrap: "wrap",
-                }}
-              >
+              <div className="search-bar">
                 <input
-                  className="input"
-                  style={{ flex: 1, minWidth: 180 }}
+                  className="ff-input"
                   placeholder="Search clients…"
                   value={clientSearch}
                   onChange={(e) => setClientSearch(e.target.value)}
                 />
-                <div style={{ display: "flex", gap: "0.4rem" }}>
-                  {(["name", "recent"] as const).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setClientSort(s)}
-                      style={{
-                        padding: "0 0.85rem",
-                        height: 42,
-                        borderRadius: 10,
-                        cursor: "pointer",
-                        fontWeight: 600,
-                        fontSize: 13,
-                        border:
-                          clientSort === s
-                            ? "2px solid var(--accent)"
-                            : "1px solid var(--border)",
-                        background:
-                          clientSort === s
-                            ? "rgba(124,106,247,0.15)"
-                            : "var(--surface2)",
-                        color:
-                          clientSort === s ? "var(--accent)" : "var(--muted)",
-                      }}
-                    >
-                      {s === "name" ? "A–Z" : "Recent"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {filteredClients.length === 0 && clients.length === 0 ? (
-              <div
-                className="card"
-                style={{
-                  textAlign: "center",
-                  padding: "3rem",
-                  color: "var(--muted)",
-                }}
-              >
-                No clients yet. Connect your first client above.
-              </div>
-            ) : filteredClients.length === 0 ? (
-              <div
-                className="card"
-                style={{
-                  textAlign: "center",
-                  padding: "2rem",
-                  color: "var(--muted)",
-                }}
-              >
-                No clients match "{clientSearch}".
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: "0.75rem" }}>
-                {filteredClients.map((c) => (
-                  <div
-                    key={c.id}
-                    className="card"
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => openClient(c)}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.borderColor = "var(--accent)")
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.borderColor = "var(--border)")
-                    }
+                {(["name", "recent"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setClientSort(s)}
+                    className={`btn btn-sm${
+                      clientSort === s ? " btn-primary" : " btn-outline"
+                    }`}
                   >
-                    <div>
-                      <div
-                        style={{
-                          fontFamily: "Syne,sans-serif",
-                          fontWeight: 700,
-                          fontSize: "1.05rem",
-                        }}
-                      >
-                        {c.name}
-                      </div>
-                      <div style={{ color: "var(--muted)", fontSize: 13 }}>
-                        Age {c.age} · {c.height_cm} cm · {c.weight_kg} kg
-                      </div>
-                    </div>
-                    <button className="btn btn-outline btn-sm">Open →</button>
-                  </div>
+                    {s === "name" ? "A–Z" : "Recent"}
+                  </button>
                 ))}
               </div>
             )}
-          </>
+            {filteredClients.length === 0 ? (
+              <div className="empty-state">
+                <div className="es-icon">👥</div>
+                <div className="es-title">
+                  {clientSearch
+                    ? `No match for "${clientSearch}"`
+                    : "No clients yet"}
+                </div>
+                <div className="es-sub">Connect your first client above.</div>
+              </div>
+            ) : (
+              filteredClients.map((c) => (
+                <div
+                  key={c.id}
+                  className="client-card"
+                  onClick={() => openClient(c)}
+                >
+                  <div className="client-avatar">
+                    {c.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="client-info">
+                    <div className="client-name">{c.name}</div>
+                    <div className="client-meta">
+                      Age {c.age} · {c.height_cm} cm · {c.weight_kg} kg
+                    </div>
+                  </div>
+                  <span style={{ color: "var(--muted)", fontSize: 18 }}>›</span>
+                </div>
+              ))
+            )}
+          </div>
         )}
 
         {/* ── CLIENT DETAIL ── */}
         {view === "client_detail" && selectedClient && (
-          <>
+          <div className="page-enter">
             <div
               style={{
                 display: "flex",
-                gap: "0.75rem",
-                alignItems: "center",
-                marginBottom: "1.25rem",
+                gap: 10,
+                marginBottom: 16,
                 flexWrap: "wrap",
               }}
             >
@@ -2303,30 +1898,22 @@ export default function Coach() {
                 ← Back
               </button>
               <div style={{ flex: 1 }}>
-                <h2 style={{ margin: 0 }}>{selectedClient.name}</h2>
-                <p style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>
                   Age {selectedClient.age} · {selectedClient.height_cm} cm ·{" "}
                   {selectedClient.weight_kg} kg
-                </p>
+                </div>
               </div>
-              {/* ── NEW: Chat button ── */}
               <button
                 className="btn btn-outline btn-sm"
-                style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
-                onClick={() => {
-                  setChatClientId(selectedClient.id);
-                  setChatClientName(selectedClient.name);
-                  setChatOpen(true);
-                }}
+                onClick={() => setPlanTab("photos")}
               >
-                💬 Chat
+                📸 Photos
               </button>
             </div>
-
-            {/* Calendar */}
+            {/* Date selector */}
             <div
               className="card"
-              style={{ marginBottom: "1.25rem", padding: "0.85rem 1rem" }}
+              style={{ marginBottom: 14, padding: "12px 16px" }}
             >
               <button
                 onClick={() => setCalendarOpen((o) => !o)}
@@ -2338,31 +1925,17 @@ export default function Coach() {
                   background: "none",
                   border: "none",
                   cursor: "pointer",
-                  padding: 0,
                   color: "inherit",
+                  fontFamily: "var(--font)",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.75rem",
-                  }}
-                >
-                  <span style={{ fontSize: 18 }}>📅</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 20 }}>📅</span>
                   <div style={{ textAlign: "left" }}>
-                    <div
-                      style={{
-                        fontFamily: "Syne,sans-serif",
-                        fontWeight: 700,
-                        fontSize: "0.95rem",
-                      }}
-                    >
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>
                       {selDateDisplay}
                     </div>
-                    <div
-                      style={{ display: "flex", gap: "0.35rem", marginTop: 3 }}
-                    >
+                    <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
                       {planDates.has(selectedDate) && (
                         <span className="badge badge-green">Has plan</span>
                       )}
@@ -2375,10 +1948,9 @@ export default function Coach() {
                 <span
                   style={{
                     color: "var(--muted)",
-                    fontSize: 16,
                     transform: calendarOpen ? "rotate(180deg)" : "none",
-                    transition: "transform 0.2s",
-                    marginLeft: "auto",
+                    transition: "0.2s",
+                    display: "block",
                   }}
                 >
                   ▼
@@ -2387,8 +1959,8 @@ export default function Coach() {
               {calendarOpen && (
                 <div
                   style={{
-                    marginTop: "1rem",
-                    paddingTop: "1rem",
+                    marginTop: 14,
+                    paddingTop: 14,
                     borderTop: "1px solid var(--border)",
                   }}
                 >
@@ -2400,54 +1972,39 @@ export default function Coach() {
                 </div>
               )}
             </div>
-
             {/* Plan tabs */}
-            <div className="tab-bar" style={{ marginBottom: "1.25rem" }}>
-              <button
-                className={`tab ${planTab === "diet" ? "active" : ""}`}
-                onClick={() => setPlanTab("diet")}
-              >
-                🥗 Diet
-              </button>
-              <button
-                className={`tab ${planTab === "workout" ? "active" : ""}`}
-                onClick={() => setPlanTab("workout")}
-              >
-                🏋️ Workout
-              </button>
-              <button
-                className={`tab ${planTab === "progress" ? "active" : ""}`}
-                onClick={() => setPlanTab("progress")}
-              >
-                📊 Progress
-              </button>
-              <button
-                className={`tab ${planTab === "goals" ? "active" : ""}`}
-                onClick={() => setPlanTab("goals")}
-              >
-                🎯 Goals
-              </button>
-              {/* ── NEW: Photos tab ── */}
-              <button
-                className={`tab ${planTab === "photos" ? "active" : ""}`}
-                onClick={() => {
-                  setPlanTab("photos");
-                  if (selectedClient) loadWeeklyPhotos(selectedClient.id);
-                }}
-              >
-                📸 Photos
-              </button>
+            <div className="plan-tabs">
+              {(
+                [
+                  ["diet", "🥗 Diet"],
+                  ["workout", "🏋️ Workout"],
+                  ["progress", "📊 Progress"],
+                  ["goals", "🎯 Goals"],
+                  ["photos", "📸 Photos"],
+                ] as [PlanTab, string][]
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  className={`plan-tab${planTab === id ? " active" : ""}`}
+                  onClick={() => {
+                    setPlanTab(id);
+                    if (id === "photos" && selectedClient)
+                      loadWeeklyPhotos(selectedClient.id);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
             {loadingPlan && planTab !== "progress" && planTab !== "photos" ? (
-              <div style={{ textAlign: "center", padding: "3rem" }}>
-                <div className="spinner" />
-              </div>
-            ) : planTab === "diet" ? (
+              <div className="spinner" />
+            ) : null}
+
+            {/* DIET */}
+            {planTab === "diet" && !loadingPlan && (
               <>
-                {clientGoals && clientGoals.calories_target > 0 && (
-                  <ClientMacroRings meals={meals} goals={clientGoals} />
-                )}
+                <MacroRingsPreview meals={meals} goals={clientGoals} />
                 <div
                   style={{
                     display: "flex",
@@ -2455,23 +2012,18 @@ export default function Coach() {
                     justifyContent: "space-between",
                     background: "var(--surface2)",
                     borderRadius: 10,
-                    padding: "0.6rem 0.9rem",
-                    marginBottom: "1rem",
-                    gap: "0.75rem",
+                    padding: "10px 14px",
+                    marginBottom: 12,
+                    gap: 10,
                     flexWrap: "wrap",
                   }}
                 >
-                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                    📋{" "}
-                    <span style={{ color: "var(--text)" }}>
-                      Reuse or manage plans
-                    </span>
-                  </div>
-                  <div
-                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
-                  >
+                  <span style={{ fontSize: 13, color: "var(--text2)" }}>
+                    📋 Reuse plans
+                  </span>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button
-                      className="btn btn-outline btn-sm"
+                      className="btn btn-outline btn-xs"
                       onClick={() => setShowCopyModal("diet")}
                       disabled={planDates.size === 0}
                     >
@@ -2479,11 +2031,7 @@ export default function Coach() {
                     </button>
                     {meals.length > 0 && (
                       <button
-                        className="btn btn-sm"
-                        style={{
-                          background: "rgba(248,113,113,0.15)",
-                          color: "var(--red)",
-                        }}
+                        className="btn btn-danger btn-xs"
                         onClick={deleteDietPlan}
                       >
                         🗑 Remove
@@ -2491,30 +2039,26 @@ export default function Coach() {
                     )}
                   </div>
                 </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label className="label">Day Note (optional)</label>
+                <div style={{ marginBottom: 12 }}>
+                  <label className="ff-label">Day Note (optional)</label>
                   <input
-                    className="input"
+                    className="ff-input"
                     placeholder="e.g. High carb day…"
                     value={dietNote}
                     onChange={(e) => setDietNote(e.target.value)}
                   />
                 </div>
                 {meals.length === 0 && (
-                  <div
-                    className="card"
-                    style={{
-                      textAlign: "center",
-                      padding: "2rem",
-                      color: "var(--muted)",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    No meals yet. Click "+ Add Meal" to build the plan.
+                  <div className="empty-state">
+                    <div className="es-icon">🍽️</div>
+                    <div className="es-title">No meals yet</div>
+                    <div className="es-sub">
+                      Add meals below to build the plan.
+                    </div>
                   </div>
                 )}
                 {meals.map((meal, mi) => {
-                  const totalCal = meal.items.reduce(
+                  const totCal = meal.items.reduce(
                     (s, it) =>
                       s +
                       (it.food
@@ -2523,7 +2067,7 @@ export default function Coach() {
                         : 0),
                     0
                   );
-                  const totalP = meal.items.reduce(
+                  const totP = meal.items.reduce(
                     (s, it) =>
                       s +
                       (it.food
@@ -2532,126 +2076,69 @@ export default function Coach() {
                         : 0),
                     0
                   );
-                  const totalC = meal.items.reduce(
-                    (s, it) =>
-                      s +
-                      (it.food
-                        ? it.food.carbs_per_serving *
-                          macroScale(it.food, it.quantity)
-                        : 0),
-                    0
-                  );
-                  const totalF = meal.items.reduce(
-                    (s, it) =>
-                      s +
-                      (it.food
-                        ? it.food.fat_per_serving *
-                          macroScale(it.food, it.quantity)
-                        : 0),
-                    0
-                  );
                   return (
                     <div
                       key={mi}
-                      className="card"
-                      style={{
-                        marginBottom: "1rem",
-                        padding: 0,
-                        overflow: "hidden",
-                      }}
+                      className="meal-card"
+                      style={{ marginBottom: 12 }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "0.6rem",
-                          alignItems: "center",
-                          padding: "0.75rem 0.9rem",
-                          background: "var(--surface2)",
-                          borderBottom: "1px solid var(--border)",
-                        }}
-                      >
+                      <div className="meal-header">
+                        <div className="meal-header-left">
+                          <div className="meal-num">{mi + 1}</div>
+                          <input
+                            className="ff-input ff-input-sm"
+                            style={{
+                              fontWeight: 700,
+                              border: "none",
+                              background: "transparent",
+                              flex: "unset",
+                              width: 160,
+                            }}
+                            value={meal.meal_name}
+                            onChange={(e) =>
+                              setMeals((prev) =>
+                                prev.map((m, i) =>
+                                  i !== mi
+                                    ? m
+                                    : { ...m, meal_name: e.target.value }
+                                )
+                              )
+                            }
+                          />
+                        </div>
                         <div
                           style={{
-                            background: "var(--accent)",
-                            color: "#fff",
-                            borderRadius: "50%",
-                            width: 28,
-                            height: 28,
                             display: "flex",
                             alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            flexShrink: 0,
+                            gap: 8,
                           }}
                         >
-                          {mi + 1}
-                        </div>
-                        <input
-                          className="input"
-                          style={{
-                            flex: 1,
-                            fontWeight: 600,
-                            fontFamily: "Syne,sans-serif",
-                          }}
-                          value={meal.meal_name}
-                          onChange={(e) =>
-                            setMeals((prev) =>
-                              prev.map((m, i) =>
-                                i !== mi
-                                  ? m
-                                  : { ...m, meal_name: e.target.value }
-                              )
-                            )
-                          }
-                        />
-                        <button
-                          className="btn btn-sm"
-                          style={{
-                            background: "rgba(248,113,113,0.15)",
-                            color: "var(--red)",
-                            flexShrink: 0,
-                          }}
-                          onClick={() => removeMeal(mi)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      {meal.items.length > 0 && (
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: "1rem",
-                            padding: "0.45rem 1rem",
-                            background: "rgba(124,106,247,0.05)",
-                            borderBottom: "1px solid var(--border)",
-                            fontSize: 12,
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <span
-                            style={{ fontWeight: 700, color: "var(--accent)" }}
+                          {meal.items.length > 0 && (
+                            <span
+                              style={{
+                                fontSize: 12,
+                                color: "var(--accent)",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {Math.round(totCal)} kcal · P {totP.toFixed(0)}g
+                            </span>
+                          )}
+                          <button
+                            className="btn btn-danger btn-xs"
+                            onClick={() => removeMeal(mi)}
                           >
-                            {Math.round(totalCal)} kcal
-                          </span>
-                          <span style={{ color: "#f87171" }}>
-                            P {totalP.toFixed(1)}g
-                          </span>
-                          <span style={{ color: "#facc15" }}>
-                            C {totalC.toFixed(1)}g
-                          </span>
-                          <span style={{ color: "var(--accent2)" }}>
-                            F {totalF.toFixed(1)}g
-                          </span>
+                            Remove
+                          </button>
                         </div>
-                      )}
-                      <div style={{ padding: "0.5rem 0.9rem" }}>
+                      </div>
+                      <div style={{ padding: "8px 14px" }}>
                         {meal.items.length === 0 && (
                           <p
                             style={{
                               color: "var(--muted)",
                               fontSize: 13,
-                              marginBottom: "0.5rem",
+                              marginBottom: 8,
                             }}
                           >
                             No foods yet.
@@ -2669,23 +2156,22 @@ export default function Coach() {
                             <div
                               key={ii}
                               style={{
-                                background: "var(--bg,#0d0d18)",
+                                background: "var(--bg)",
                                 borderRadius: 8,
-                                padding: "0.6rem 0.7rem",
-                                marginBottom: "0.5rem",
+                                padding: "8px 10px",
+                                marginBottom: 8,
                               }}
                             >
                               <div
                                 style={{
                                   display: "grid",
                                   gridTemplateColumns: "1fr 80px 32px",
-                                  gap: "0.4rem",
+                                  gap: 8,
                                   alignItems: "center",
                                 }}
                               >
                                 <select
-                                  className="input"
-                                  style={{ fontSize: 13 }}
+                                  className="ff-input ff-input-sm"
                                   value={item.food_id}
                                   onChange={(e) =>
                                     updateMealItem(
@@ -2710,15 +2196,11 @@ export default function Coach() {
                                   }}
                                 >
                                   <input
-                                    className="input"
+                                    className="ff-input ff-input-sm"
                                     type="number"
                                     min="0.1"
                                     step="any"
-                                    style={{
-                                      fontSize: 13,
-                                      flex: 1,
-                                      minWidth: 0,
-                                    }}
+                                    style={{ minWidth: 0 }}
                                     value={item.quantity}
                                     onChange={(e) =>
                                       updateMealItem(
@@ -2731,25 +2213,25 @@ export default function Coach() {
                                   />
                                   <span
                                     style={{
-                                      fontSize: 11,
+                                      fontSize: 10,
                                       color: "var(--muted)",
                                       whiteSpace: "nowrap",
                                     }}
                                   >
-                                    {item.unit || food?.serving_unit || ""}
+                                    {item.unit}
                                   </span>
                                 </div>
                                 <button
                                   onClick={() => removeMealItem(mi, ii)}
                                   style={{
-                                    background: "rgba(248,113,113,0.15)",
+                                    background: "var(--red-dim)",
                                     color: "var(--red)",
                                     border: "none",
                                     borderRadius: 6,
                                     cursor: "pointer",
+                                    height: 32,
+                                    fontSize: 12,
                                     fontWeight: 700,
-                                    fontSize: 14,
-                                    height: 36,
                                   }}
                                 >
                                   ✕
@@ -2761,27 +2243,19 @@ export default function Coach() {
                                     fontSize: 11,
                                     color: "var(--muted)",
                                     marginTop: 5,
-                                    display: "flex",
-                                    gap: "0.75rem",
-                                    flexWrap: "wrap",
                                   }}
                                 >
-                                  <span>
-                                    {food.serving_size}
-                                    {food.serving_unit} ={" "}
-                                    {food.calories_per_serving} kcal · P{" "}
-                                    {food.protein_per_serving}g · C{" "}
-                                    {food.carbs_per_serving}g · F{" "}
-                                    {food.fat_per_serving}g
-                                  </span>
+                                  {food.serving_size}
+                                  {food.serving_unit} ={" "}
+                                  {food.calories_per_serving} kcal
                                   {item.quantity !== food.serving_size && (
                                     <span
                                       style={{
                                         color: "var(--accent)",
-                                        fontWeight: 600,
+                                        marginLeft: 6,
                                       }}
                                     >
-                                      {item.quantity}
+                                      → {item.quantity}
                                       {food.serving_unit} = {itemCal} kcal
                                     </span>
                                   )}
@@ -2791,8 +2265,7 @@ export default function Coach() {
                           );
                         })}
                         <button
-                          className="btn btn-outline btn-sm"
-                          style={{ marginTop: "0.25rem" }}
+                          className="btn btn-outline btn-xs"
                           onClick={() => addMealItem(mi)}
                         >
                           + Add Food
@@ -2803,8 +2276,8 @@ export default function Coach() {
                 })}
                 {meals.length > 0 &&
                   (() => {
-                    const allItems = meals.flatMap((m) => m.items);
-                    const dayTotalCal = allItems.reduce(
+                    const all = meals.flatMap((m) => m.items);
+                    const totCal = all.reduce(
                       (s, it) =>
                         s +
                         (it.food
@@ -2813,7 +2286,7 @@ export default function Coach() {
                           : 0),
                       0
                     );
-                    const dayTotalP = allItems.reduce(
+                    const totP = all.reduce(
                       (s, it) =>
                         s +
                         (it.food
@@ -2822,7 +2295,7 @@ export default function Coach() {
                           : 0),
                       0
                     );
-                    const dayTotalC = allItems.reduce(
+                    const totC = all.reduce(
                       (s, it) =>
                         s +
                         (it.food
@@ -2831,7 +2304,7 @@ export default function Coach() {
                           : 0),
                       0
                     );
-                    const dayTotalF = allItems.reduce(
+                    const totF = all.reduce(
                       (s, it) =>
                         s +
                         (it.food
@@ -2844,48 +2317,40 @@ export default function Coach() {
                       <div
                         className="card"
                         style={{
-                          marginBottom: "1rem",
-                          padding: "0.75rem 1rem",
+                          marginBottom: 14,
                           display: "flex",
-                          gap: "1rem",
+                          gap: 12,
                           flexWrap: "wrap",
                           alignItems: "center",
+                          padding: "12px 16px",
                         }}
                       >
-                        <span
-                          style={{
-                            fontFamily: "Syne,sans-serif",
-                            fontWeight: 700,
-                            fontSize: 13,
-                          }}
-                        >
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>
                           Day Total
                         </span>
                         <span
-                          style={{ fontWeight: 700, color: "var(--accent)" }}
+                          style={{ color: "var(--accent)", fontWeight: 700 }}
                         >
-                          {Math.round(dayTotalCal)} kcal
+                          {Math.round(totCal)} kcal
                         </span>
                         <span style={{ color: "#f87171" }}>
-                          P {dayTotalP.toFixed(1)}g
+                          P {totP.toFixed(1)}g
                         </span>
-                        <span style={{ color: "#facc15" }}>
-                          C {dayTotalC.toFixed(1)}g
+                        <span style={{ color: "var(--yellow)" }}>
+                          C {totC.toFixed(1)}g
                         </span>
                         <span style={{ color: "var(--accent2)" }}>
-                          F {dayTotalF.toFixed(1)}g
+                          F {totF.toFixed(1)}g
                         </span>
                       </div>
                     );
                   })()}
-                <div
-                  style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}
-                >
-                  <button className="btn btn-outline" onClick={addMeal}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button className="btn btn-outline btn-sm" onClick={addMeal}>
                     + Add Meal
                   </button>
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-primary btn-sm"
                     onClick={saveDietPlan}
                     disabled={savingDiet}
                   >
@@ -2893,7 +2358,10 @@ export default function Coach() {
                   </button>
                 </div>
               </>
-            ) : planTab === "workout" ? (
+            )}
+
+            {/* WORKOUT */}
+            {planTab === "workout" && !loadingPlan && (
               <>
                 <div
                   style={{
@@ -2902,23 +2370,18 @@ export default function Coach() {
                     justifyContent: "space-between",
                     background: "var(--surface2)",
                     borderRadius: 10,
-                    padding: "0.6rem 0.9rem",
-                    marginBottom: "1rem",
-                    gap: "0.75rem",
+                    padding: "10px 14px",
+                    marginBottom: 12,
+                    gap: 10,
                     flexWrap: "wrap",
                   }}
                 >
-                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                    📋{" "}
-                    <span style={{ color: "var(--text)" }}>
-                      Reuse or manage plans
-                    </span>
-                  </div>
-                  <div
-                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
-                  >
+                  <span style={{ fontSize: 13, color: "var(--text2)" }}>
+                    📋 Reuse plans
+                  </span>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button
-                      className="btn btn-outline btn-sm"
+                      className="btn btn-outline btn-xs"
                       onClick={() => setShowCopyModal("workout")}
                       disabled={planDates.size === 0}
                     >
@@ -2926,11 +2389,7 @@ export default function Coach() {
                     </button>
                     {workoutItems.length > 0 && (
                       <button
-                        className="btn btn-sm"
-                        style={{
-                          background: "rgba(248,113,113,0.15)",
-                          color: "var(--red)",
-                        }}
+                        className="btn btn-danger btn-xs"
                         onClick={deleteWorkoutPlan}
                       >
                         🗑 Remove
@@ -2939,16 +2398,10 @@ export default function Coach() {
                   </div>
                 </div>
                 {workoutItems.length === 0 && (
-                  <div
-                    className="card"
-                    style={{
-                      textAlign: "center",
-                      padding: "2rem",
-                      color: "var(--muted)",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    No exercises yet. Click "+ Add Exercise".
+                  <div className="empty-state">
+                    <div className="es-icon">🏋️</div>
+                    <div className="es-title">No exercises yet</div>
+                    <div className="es-sub">Add exercises below.</div>
                   </div>
                 )}
                 {workoutItems.map((item, idx) => (
@@ -2956,26 +2409,26 @@ export default function Coach() {
                     key={idx}
                     style={{
                       background: "var(--surface2)",
-                      borderRadius: 10,
-                      padding: "0.75rem",
-                      marginBottom: "0.5rem",
+                      borderRadius: 12,
+                      padding: "12px 14px",
+                      marginBottom: 10,
                     }}
                   >
                     <div
                       style={{
                         display: "flex",
-                        gap: "0.6rem",
+                        gap: 10,
                         alignItems: "center",
-                        marginBottom: "0.5rem",
+                        marginBottom: 10,
                       }}
                     >
                       <div
                         style={{
-                          background: "rgba(124,106,247,0.15)",
-                          color: "var(--accent)",
-                          borderRadius: 8,
                           width: 28,
                           height: 28,
+                          borderRadius: 8,
+                          background: "var(--accent-dim)",
+                          color: "var(--accent)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
@@ -2987,7 +2440,7 @@ export default function Coach() {
                         {idx + 1}
                       </div>
                       <select
-                        className="input"
+                        className="ff-input ff-input-sm"
                         style={{ flex: 1 }}
                         value={item.exercise_id}
                         onChange={(e) =>
@@ -3007,12 +2460,12 @@ export default function Coach() {
                           )
                         }
                         style={{
-                          background: "rgba(248,113,113,0.15)",
+                          background: "var(--red-dim)",
                           color: "var(--red)",
                           border: "none",
                           borderRadius: 6,
                           cursor: "pointer",
-                          padding: "4px 8px",
+                          padding: "4px 10px",
                           fontWeight: 700,
                           flexShrink: 0,
                         }}
@@ -3020,78 +2473,60 @@ export default function Coach() {
                         ✕
                       </button>
                     </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "0.5rem",
-                        alignItems: "center",
-                        paddingLeft: 36,
-                      }}
-                    >
-                      <input
-                        className="input"
-                        type="number"
-                        style={{ width: 60 }}
-                        placeholder="Sets"
-                        value={item.sets}
-                        onChange={(e) =>
-                          updateWorkoutItem(
-                            idx,
-                            "sets",
-                            parseInt(e.target.value) || 1
-                          )
-                        }
-                      />
-                      <span style={{ color: "var(--muted)", fontWeight: 700 }}>
-                        ×
-                      </span>
-                      <input
-                        className="input"
-                        type="number"
-                        style={{ width: 60 }}
-                        placeholder="Reps"
-                        value={item.reps}
-                        onChange={(e) =>
-                          updateWorkoutItem(
-                            idx,
-                            "reps",
-                            parseInt(e.target.value) || 1
-                          )
-                        }
-                      />
-                      <input
-                        className="input"
-                        type="number"
-                        style={{ width: 70 }}
-                        placeholder="kg"
-                        value={item.weight_kg ?? ""}
-                        onChange={(e) =>
-                          updateWorkoutItem(
-                            idx,
-                            "weight_kg",
-                            parseFloat(e.target.value) || null
-                          )
-                        }
-                      />
-                      <span style={{ color: "var(--muted)", fontSize: 12 }}>
-                        kg
-                      </span>
+                    <div style={{ display: "flex", gap: 8, paddingLeft: 38 }}>
+                      {[
+                        { label: "Sets", key: "sets", val: item.sets, ph: "3" },
+                        {
+                          label: "Reps",
+                          key: "reps",
+                          val: item.reps,
+                          ph: "10",
+                        },
+                        {
+                          label: "kg",
+                          key: "weight_kg",
+                          val: item.weight_kg ?? "",
+                          ph: "—",
+                        },
+                      ].map((f) => (
+                        <div key={f.key} style={{ flex: 1 }}>
+                          <label className="ff-label">{f.label}</label>
+                          <input
+                            className="ff-input ff-input-sm"
+                            type="number"
+                            placeholder={f.ph}
+                            value={f.val}
+                            onChange={(e) =>
+                              updateWorkoutItem(
+                                idx,
+                                f.key,
+                                f.key === "weight_kg"
+                                  ? parseFloat(e.target.value) || null
+                                  : parseInt(e.target.value) || 1
+                              )
+                            }
+                          />
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
                 <div
                   style={{
                     display: "flex",
-                    gap: "0.75rem",
+                    gap: 10,
                     flexWrap: "wrap",
-                    marginTop: "0.5rem",
+                    marginTop: 4,
                   }}
                 >
-                  <button className="btn btn-outline" onClick={addWorkoutItem}>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={addWorkoutItem}
+                  >
                     + Add Exercise
                   </button>
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-primary btn-sm"
                     onClick={saveWorkoutPlan}
                     disabled={savingWorkout}
                   >
@@ -3099,327 +2534,12 @@ export default function Coach() {
                   </button>
                 </div>
               </>
-            ) : planTab === "goals" ? (
+            )}
+
+            {/* PROGRESS */}
+            {planTab === "progress" && (
               <>
-                <div className="card" style={{ marginBottom: "1.25rem" }}>
-                  <div
-                    className="section-title"
-                    style={{ marginBottom: "1rem" }}
-                  >
-                    🎯 Daily Macro Targets
-                  </div>
-                  <p
-                    style={{
-                      color: "var(--muted)",
-                      fontSize: 13,
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    Set daily nutrition goals for {selectedClient?.name}.
-                  </p>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: "0.75rem",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    {[
-                      {
-                        key: "calories_target",
-                        label: "Calories (kcal)",
-                        color: "inherit",
-                        icon: "🔥",
-                      },
-                      {
-                        key: "protein_target",
-                        label: "Protein (g)",
-                        color: "#f87171",
-                        icon: "🥩",
-                      },
-                      {
-                        key: "carbs_target",
-                        label: "Carbs (g)",
-                        color: "#facc15",
-                        icon: "🍚",
-                      },
-                      {
-                        key: "fat_target",
-                        label: "Fat (g)",
-                        color: "var(--accent2)",
-                        icon: "🥑",
-                      },
-                    ].map(({ key, label, color, icon }) => (
-                      <div key={key}>
-                        <label
-                          className="label"
-                          style={{ color, fontSize: 12 }}
-                        >
-                          {icon} {label}
-                        </label>
-                        <input
-                          className="input"
-                          type="number"
-                          min="0"
-                          step="1"
-                          placeholder="0"
-                          value={(goalsForm as any)[key]}
-                          onChange={(e) =>
-                            setGoalsForm((prev) => ({
-                              ...prev,
-                              [key]: e.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.75rem",
-                      padding: "0.75rem",
-                      background: "var(--surface2)",
-                      borderRadius: 10,
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    <div
-                      onClick={() =>
-                        setGoalsForm((prev) => ({
-                          ...prev,
-                          show_macros_to_client: !prev.show_macros_to_client,
-                        }))
-                      }
-                      style={{
-                        width: 44,
-                        height: 24,
-                        borderRadius: 99,
-                        cursor: "pointer",
-                        flexShrink: 0,
-                        background: goalsForm.show_macros_to_client
-                          ? "var(--accent)"
-                          : "var(--border)",
-                        position: "relative",
-                        transition: "background 0.2s",
-                      }}
-                    >
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 3,
-                          left: goalsForm.show_macros_to_client ? 23 : 3,
-                          width: 18,
-                          height: 18,
-                          borderRadius: "50%",
-                          background: "#fff",
-                          transition: "left 0.2s",
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>
-                        Show macro progress to client
-                      </div>
-                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                        {goalsForm.show_macros_to_client
-                          ? "Client can see their macro rings"
-                          : "Macro rings hidden from client view"}
-                      </div>
-                    </div>
-                  </div>
-                  {clientGoals && (
-                    <div
-                      style={{
-                        background: "rgba(124,106,247,0.07)",
-                        border: "1px solid rgba(124,106,247,0.2)",
-                        borderRadius: 10,
-                        padding: "0.65rem 1rem",
-                        marginBottom: "1rem",
-                        fontSize: 13,
-                      }}
-                    >
-                      <span style={{ color: "var(--muted)" }}>Current: </span>
-                      <span style={{ fontWeight: 700 }}>
-                        {clientGoals.calories_target} kcal
-                      </span>
-                      {" · "}
-                      <span style={{ color: "#f87171" }}>
-                        P {clientGoals.protein_target}g
-                      </span>
-                      {" · "}
-                      <span style={{ color: "#facc15" }}>
-                        C {clientGoals.carbs_target}g
-                      </span>
-                      {" · "}
-                      <span style={{ color: "var(--accent2)" }}>
-                        F {clientGoals.fat_target}g
-                      </span>
-                    </div>
-                  )}
-                  <button
-                    className="btn btn-primary"
-                    onClick={saveClientGoals}
-                    disabled={savingGoals}
-                  >
-                    {savingGoals ? "Saving…" : "💾 Save Goals"}
-                  </button>
-                </div>
-              </>
-            ) : planTab === "photos" ? (
-              // ── NEW: Weekly Progress Photos Tab ──
-              <>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: "1.25rem",
-                    flexWrap: "wrap",
-                    gap: "0.75rem",
-                  }}
-                >
-                  <div>
-                    <h3 style={{ margin: 0 }}>📸 Weekly Progress Photos</h3>
-                    <p
-                      style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}
-                    >
-                      {weeklyPhotos.length} photo
-                      {weeklyPhotos.length !== 1 ? "s" : ""} uploaded by client
-                    </p>
-                  </div>
-                  {weeklyPhotos.length > 0 && (
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={downloadAllPhotos}
-                    >
-                      ⬇ Download All
-                    </button>
-                  )}
-                </div>
-                {loadingPhotos ? (
-                  <div style={{ textAlign: "center", padding: "3rem" }}>
-                    <div className="spinner" />
-                  </div>
-                ) : weeklyPhotos.length === 0 ? (
-                  <div
-                    className="card"
-                    style={{
-                      textAlign: "center",
-                      padding: "3rem",
-                      color: "var(--muted)",
-                    }}
-                  >
-                    Client hasn't uploaded any weekly photos yet.
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fill, minmax(200px, 1fr))",
-                      gap: "1rem",
-                    }}
-                  >
-                    {weeklyPhotos.map((photo) => {
-                      const weekLabel = new Date(
-                        photo.week_start + "T00:00:00"
-                      ).toLocaleDateString("en-GB", {
-                        day: "numeric",
-                        month: "long",
-                        year: "numeric",
-                      });
-                      return (
-                        <div
-                          key={photo.id}
-                          className="card"
-                          style={{ padding: 0, overflow: "hidden" }}
-                        >
-                          <img
-                            src={photo.photo_url}
-                            alt={`Week of ${weekLabel}`}
-                            style={{
-                              width: "100%",
-                              height: 200,
-                              objectFit: "cover",
-                              display: "block",
-                              cursor: "pointer",
-                            }}
-                            onClick={() =>
-                              window.open(photo.photo_url, "_blank")
-                            }
-                          />
-                          <div style={{ padding: "0.65rem 0.75rem" }}>
-                            <div
-                              style={{
-                                fontWeight: 700,
-                                fontSize: 13,
-                                marginBottom: 2,
-                              }}
-                            >
-                              Week of {weekLabel}
-                            </div>
-                            {photo.notes && (
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  color: "var(--muted)",
-                                  marginBottom: "0.5rem",
-                                }}
-                              >
-                                {photo.notes}
-                              </div>
-                            )}
-                            <div style={{ display: "flex", gap: "0.4rem" }}>
-                              <button
-                                className="btn btn-outline btn-sm"
-                                style={{ flex: 1, fontSize: 12 }}
-                                onClick={() =>
-                                  downloadPhoto(
-                                    photo.photo_url,
-                                    `${selectedClient?.name ?? "client"}-week-${
-                                      photo.week_start
-                                    }.jpg`
-                                  )
-                                }
-                              >
-                                ⬇ Download
-                              </button>
-                              <button
-                                className="btn btn-sm"
-                                style={{
-                                  background: "rgba(124,106,247,0.15)",
-                                  color: "var(--accent)",
-                                  fontSize: 12,
-                                }}
-                                onClick={() =>
-                                  window.open(photo.photo_url, "_blank")
-                                }
-                              >
-                                🔍
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            ) : (
-              // Progress tab
-              <>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2,1fr)",
-                    gap: "0.75rem",
-                    marginBottom: "1.25rem",
-                  }}
-                >
+                <div className="stats-grid">
                   {[
                     {
                       label: "Avg Diet",
@@ -3434,7 +2554,7 @@ export default function Coach() {
                     {
                       label: "Latest Weight",
                       val: latestWeight ? `${latestWeight} kg` : "—",
-                      color: "inherit",
+                      color: "var(--text)",
                     },
                     {
                       label: "Days Logged",
@@ -3442,59 +2562,31 @@ export default function Coach() {
                       color: "var(--accent)",
                     },
                   ].map((s) => (
-                    <div
-                      key={s.label}
-                      className="card"
-                      style={{ padding: "0.85rem 1rem" }}
-                    >
-                      <div
-                        style={{
-                          fontFamily: "Syne,sans-serif",
-                          fontWeight: 800,
-                          fontSize: "1.4rem",
-                          color: s.color,
-                        }}
-                      >
+                    <div key={s.label} className="stat-card">
+                      <div className="sv" style={{ color: s.color }}>
                         {s.val}
                       </div>
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: "var(--muted)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {s.label}
-                      </div>
+                      <div className="sl">{s.label}</div>
                     </div>
                   ))}
                 </div>
-                <div className="card" style={{ marginBottom: "1.25rem" }}>
-                  <div
-                    className="section-title"
-                    style={{ marginBottom: "0.75rem" }}
-                  >
-                    Weight Over Time (kg)
+                <div className="card" style={{ marginBottom: 14 }}>
+                  <div className="card-title">
+                    <span className="icon">⚖️</span>Weight Over Time
                   </div>
                   <WeightChart entries={clientProgress} />
                 </div>
                 {clientProgress.length === 0 ? (
-                  <div
-                    className="card"
-                    style={{
-                      textAlign: "center",
-                      padding: "2rem",
-                      color: "var(--muted)",
-                    }}
-                  >
-                    Client hasn't logged any progress yet.
+                  <div className="empty-state">
+                    <div className="es-icon">📊</div>
+                    <div className="es-title">No progress logged</div>
                   </div>
                 ) : (
                   <div
                     className="card"
                     style={{ padding: 0, overflow: "hidden" }}
                   >
-                    <table className="table">
+                    <table className="ff-table">
                       <thead>
                         <tr>
                           <th>Date</th>
@@ -3506,7 +2598,7 @@ export default function Coach() {
                       <tbody>
                         {clientProgress.map((p) => (
                           <tr key={p.id}>
-                            <td style={{ fontSize: 13 }}>
+                            <td style={{ fontSize: 12 }}>
                               {new Date(
                                 p.date + "T00:00:00"
                               ).toLocaleDateString("en-GB", {
@@ -3515,68 +2607,26 @@ export default function Coach() {
                               })}
                             </td>
                             <td>
-                              <div
+                              <span
                                 style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.4rem",
+                                  color: pctColor(p.diet_progress),
+                                  fontWeight: 700,
                                 }}
                               >
-                                <div
-                                  className="progress-bar"
-                                  style={{ flex: 1, maxWidth: 60 }}
-                                >
-                                  <div
-                                    className="progress-fill"
-                                    style={{
-                                      width: `${p.diet_progress}%`,
-                                      background: pctColor(p.diet_progress),
-                                    }}
-                                  />
-                                </div>
-                                <span
-                                  style={{
-                                    color: pctColor(p.diet_progress),
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  {p.diet_progress}%
-                                </span>
-                              </div>
+                                {p.diet_progress}%
+                              </span>
                             </td>
                             <td>
-                              <div
+                              <span
                                 style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.4rem",
+                                  color: pctColor(p.workout_progress),
+                                  fontWeight: 700,
                                 }}
                               >
-                                <div
-                                  className="progress-bar"
-                                  style={{ flex: 1, maxWidth: 60 }}
-                                >
-                                  <div
-                                    className="progress-fill"
-                                    style={{
-                                      width: `${p.workout_progress}%`,
-                                      background: pctColor(p.workout_progress),
-                                    }}
-                                  />
-                                </div>
-                                <span
-                                  style={{
-                                    color: pctColor(p.workout_progress),
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  {p.workout_progress}%
-                                </span>
-                              </div>
+                                {p.workout_progress}%
+                              </span>
                             </td>
-                            <td style={{ fontSize: 13 }}>
+                            <td>
                               {p.weight_kg ? (
                                 `${p.weight_kg} kg`
                               ) : (
@@ -3591,51 +2641,369 @@ export default function Coach() {
                 )}
               </>
             )}
-          </>
+
+            {/* GOALS */}
+            {planTab === "goals" && (
+              <div className="card">
+                <div className="card-title">
+                  <span className="icon">🎯</span>Daily Macro Targets
+                </div>
+                <p
+                  style={{
+                    color: "var(--text2)",
+                    fontSize: 13,
+                    marginBottom: 14,
+                  }}
+                >
+                  Set daily nutrition goals for {selectedClient?.name}.
+                </p>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 12,
+                    marginBottom: 14,
+                  }}
+                >
+                  {[
+                    {
+                      key: "calories_target",
+                      label: "🔥 Calories (kcal)",
+                      color: "var(--text)",
+                    },
+                    {
+                      key: "protein_target",
+                      label: "🥩 Protein (g)",
+                      color: "#f87171",
+                    },
+                    {
+                      key: "carbs_target",
+                      label: "🍚 Carbs (g)",
+                      color: "var(--yellow)",
+                    },
+                    {
+                      key: "fat_target",
+                      label: "🥑 Fat (g)",
+                      color: "var(--accent2)",
+                    },
+                  ].map(({ key, label, color }) => (
+                    <div key={key}>
+                      <label
+                        className="ff-label"
+                        style={{ color, fontSize: 10 }}
+                      >
+                        {label}
+                      </label>
+                      <input
+                        className="ff-input ff-input-sm"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="0"
+                        value={(goalsForm as any)[key]}
+                        onChange={(e) =>
+                          setGoalsForm((prev) => ({
+                            ...prev,
+                            [key]: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="toggle-wrap" style={{ marginBottom: 14 }}>
+                  <button
+                    className={`toggle${
+                      goalsForm.show_macros_to_client ? " on" : ""
+                    }`}
+                    onClick={() =>
+                      setGoalsForm((p) => ({
+                        ...p,
+                        show_macros_to_client: !p.show_macros_to_client,
+                      }))
+                    }
+                    style={{
+                      background: goalsForm.show_macros_to_client
+                        ? "var(--accent)"
+                        : "var(--surface3)",
+                    }}
+                  >
+                    <div className="toggle-knob" />
+                  </button>
+                  <div className="toggle-text">
+                    <div className="tt-main">Show macros to client</div>
+                    <div className="tt-sub">
+                      {goalsForm.show_macros_to_client
+                        ? "Client sees macro rings"
+                        : "Hidden from client"}
+                    </div>
+                  </div>
+                </div>
+                {clientGoals && (
+                  <div
+                    style={{
+                      background: "var(--accent-dim)",
+                      border: "1px solid rgba(124,106,247,0.2)",
+                      borderRadius: 10,
+                      padding: "10px 14px",
+                      marginBottom: 14,
+                      fontSize: 13,
+                    }}
+                  >
+                    Current: <strong>{clientGoals.calories_target} kcal</strong>{" "}
+                    ·{" "}
+                    <span style={{ color: "#f87171" }}>
+                      P {clientGoals.protein_target}g
+                    </span>{" "}
+                    ·{" "}
+                    <span style={{ color: "var(--yellow)" }}>
+                      C {clientGoals.carbs_target}g
+                    </span>{" "}
+                    ·{" "}
+                    <span style={{ color: "var(--accent2)" }}>
+                      F {clientGoals.fat_target}g
+                    </span>
+                  </div>
+                )}
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={saveClientGoals}
+                  disabled={savingGoals}
+                >
+                  {savingGoals ? "Saving…" : "💾 Save Goals"}
+                </button>
+              </div>
+            )}
+
+            {/* PHOTOS */}
+            {planTab === "photos" && (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 14,
+                    flexWrap: "wrap",
+                    gap: 10,
+                  }}
+                >
+                  <div>
+                    <h3 style={{ margin: 0 }}>📸 Weekly Photos</h3>
+                    <p
+                      style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}
+                    >
+                      {weeklyPhotos.length} photo
+                      {weeklyPhotos.length !== 1 ? "s" : ""} from client
+                    </p>
+                  </div>
+                  {weeklyPhotos.length > 0 && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={async () => {
+                        for (let i = 0; i < weeklyPhotos.length; i++) {
+                          const p = weeklyPhotos[i];
+                          await downloadPhoto(
+                            p.photo_url,
+                            `${selectedClient?.name}-week-${p.week_start}.jpg`
+                          );
+                          if (i < weeklyPhotos.length - 1)
+                            await new Promise((r) => setTimeout(r, 600));
+                        }
+                        flash("All photos downloaded!");
+                      }}
+                    >
+                      ⬇ Download All
+                    </button>
+                  )}
+                </div>
+                {loadingPhotos ? (
+                  <div className="spinner" />
+                ) : weeklyPhotos.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="es-icon">📷</div>
+                    <div className="es-title">No photos yet</div>
+                    <div className="es-sub">
+                      Client hasn't uploaded any weekly photos.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="photo-grid">
+                    {weeklyPhotos.map((photo) => {
+                      const wl = new Date(
+                        photo.week_start + "T00:00:00"
+                      ).toLocaleDateString("en-GB", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      });
+                      return (
+                        <div key={photo.id} className="photo-card">
+                          <img
+                            src={photo.photo_url}
+                            alt={`Week of ${wl}`}
+                            onClick={() =>
+                              window.open(photo.photo_url, "_blank")
+                            }
+                          />
+                          <div className="photo-card-meta">
+                            <div
+                              style={{
+                                fontWeight: 700,
+                                color: "var(--text2)",
+                                marginBottom: 2,
+                              }}
+                            >
+                              Wk of {wl}
+                            </div>
+                            {photo.notes && <div>{photo.notes}</div>}
+                            <button
+                              className="btn btn-outline btn-xs"
+                              style={{ width: "100%", marginTop: 6 }}
+                              onClick={() =>
+                                downloadPhoto(
+                                  photo.photo_url,
+                                  `${selectedClient?.name}-week-${photo.week_start}.jpg`
+                                )
+                              }
+                            >
+                              ⬇ Download
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         )}
 
-        {/* ── EXERCISE LIBRARY ── */}
-        {view === "exercises" && (
-          <>
+        {/* ── FOODS ── */}
+        {view === "foods" && (
+          <div className="page-enter">
             <div
               style={{
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                marginBottom: 14,
                 flexWrap: "wrap",
-                gap: "1rem",
-                marginBottom: "1rem",
+                gap: 10,
               }}
             >
-              <div>
-                <h2 style={{ margin: 0 }}>Exercise Library</h2>
-                <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
-                  {exercises.length} exercises
-                </p>
+              <div style={{ color: "var(--muted)", fontSize: 13 }}>
+                {filteredFoods.length}/{foods.length} foods
               </div>
               <button
-                className="btn btn-primary"
+                className="btn btn-primary btn-sm"
+                onClick={() => setShowAddFood(true)}
+              >
+                + Add Food
+              </button>
+            </div>
+            <div className="search-bar">
+              <input
+                className="ff-input"
+                placeholder="Search foods…"
+                value={foodSearch}
+                onChange={(e) => setFoodSearch(e.target.value)}
+              />
+            </div>
+            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <table className="ff-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Serving</th>
+                    <th>Cal</th>
+                    <th>P</th>
+                    <th>C</th>
+                    <th>F</th>
+                    <th style={{ width: 44 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredFoods.map((f) => (
+                    <tr key={f.id}>
+                      <td style={{ fontWeight: 500 }}>{f.name}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 11 }}>
+                        {servingLabel(f)}
+                      </td>
+                      <td style={{ fontSize: 12 }}>{f.calories_per_serving}</td>
+                      <td style={{ color: "#f87171", fontSize: 12 }}>
+                        {f.protein_per_serving}g
+                      </td>
+                      <td style={{ color: "var(--yellow)", fontSize: 12 }}>
+                        {f.carbs_per_serving}g
+                      </td>
+                      <td style={{ color: "var(--accent2)", fontSize: 12 }}>
+                        {f.fat_per_serving}g
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => deleteFood(f.id, f.name)}
+                          style={{
+                            background: "var(--red-dim)",
+                            color: "var(--red)",
+                            border: "none",
+                            borderRadius: 6,
+                            padding: "3px 8px",
+                            cursor: "pointer",
+                            fontSize: 12,
+                          }}
+                        >
+                          🗑
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── EXERCISES ── */}
+        {view === "exercises" && (
+          <div className="page-enter">
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 14,
+                flexWrap: "wrap",
+                gap: 10,
+              }}
+            >
+              <div style={{ color: "var(--muted)", fontSize: 13 }}>
+                {exercises.length} exercises
+              </div>
+              <button
+                className="btn btn-primary btn-sm"
                 onClick={() => setShowAddExercise(true)}
               >
                 + Add Exercise
               </button>
             </div>
-            <div style={{ marginBottom: "1rem" }}>
+            <div className="search-bar">
               <input
-                className="input"
+                className="ff-input"
                 placeholder="Search exercises…"
                 value={exerciseSearch}
                 onChange={(e) => setExerciseSearch(e.target.value)}
               />
             </div>
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-              <table className="table">
+              <table className="ff-table">
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Muscle Group</th>
+                    <th>Muscle</th>
                     <th>Notes</th>
-                    <th style={{ width: 52 }}>Del</th>
+                    <th style={{ width: 44 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -3659,19 +3027,17 @@ export default function Coach() {
                         <td style={{ color: "var(--muted)", fontSize: 12 }}>
                           {ex.notes || "—"}
                         </td>
-                        {/* ── NEW: Delete button ── */}
                         <td>
                           <button
-                            onClick={() => deleteExerciseItem(ex.id, ex.name)}
+                            onClick={() => deleteExercise(ex.id, ex.name)}
                             style={{
-                              background: "rgba(248,113,113,0.15)",
+                              background: "var(--red-dim)",
                               color: "var(--red)",
                               border: "none",
                               borderRadius: 6,
-                              padding: "4px 10px",
+                              padding: "3px 8px",
                               cursor: "pointer",
                               fontSize: 12,
-                              fontWeight: 600,
                             }}
                           >
                             🗑
@@ -3688,22 +3054,21 @@ export default function Coach() {
                 onClick={() => setShowAddExercise(false)}
               >
                 <div
-                  className="modal"
+                  className="modal-sheet-inner"
                   onClick={(e) => e.stopPropagation()}
-                  style={{ maxWidth: 420, width: "95vw" }}
                 >
-                  <div className="modal-title">Add Exercise</div>
+                  <div className="modal-title">➕ Add Exercise</div>
                   <div
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: "0.85rem",
+                      gap: 12,
                     }}
                   >
                     <div>
-                      <label className="label">Exercise Name *</label>
+                      <label className="ff-label">Exercise Name *</label>
                       <input
-                        className="input"
+                        className="ff-input"
                         placeholder="e.g. Barbell Squat"
                         value={newExercise.name}
                         onChange={(e) =>
@@ -3715,10 +3080,10 @@ export default function Coach() {
                       />
                     </div>
                     <div>
-                      <label className="label">Muscle Group</label>
+                      <label className="ff-label">Muscle Group</label>
                       <input
-                        className="input"
-                        placeholder="e.g. Legs, Chest, Back…"
+                        className="ff-input"
+                        placeholder="e.g. Legs, Chest, Back"
                         value={newExercise.muscle_group}
                         onChange={(e) =>
                           setNewExercise((p) => ({
@@ -3729,9 +3094,9 @@ export default function Coach() {
                       />
                     </div>
                     <div>
-                      <label className="label">Notes / Instructions</label>
+                      <label className="ff-label">Notes / Instructions</label>
                       <input
-                        className="input"
+                        className="ff-input"
                         placeholder="e.g. Keep back straight"
                         value={newExercise.notes}
                         onChange={(e) =>
@@ -3745,18 +3110,18 @@ export default function Coach() {
                     <div
                       style={{
                         display: "flex",
-                        gap: "0.75rem",
+                        gap: 10,
                         justifyContent: "flex-end",
                       }}
                     >
                       <button
-                        className="btn btn-outline"
+                        className="btn btn-outline btn-sm"
                         onClick={() => setShowAddExercise(false)}
                       >
                         Cancel
                       </button>
                       <button
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-sm"
                         onClick={handleAddExercise}
                         disabled={savingExercise || !newExercise.name.trim()}
                       >
@@ -3767,107 +3132,17 @@ export default function Coach() {
                 </div>
               </div>
             )}
-          </>
-        )}
-
-        {/* ── FOOD DATABASE ── */}
-        {view === "foods" && (
-          <>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: "1rem",
-                marginBottom: "1rem",
-              }}
-            >
-              <div>
-                <h2 style={{ margin: 0 }}>Food Database</h2>
-                <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
-                  {filteredFoods.length} / {foods.length} foods
-                </p>
-              </div>
-              <button
-                className="btn btn-primary"
-                onClick={() => setShowAddFood(true)}
-              >
-                + Add Food
-              </button>
-            </div>
-            <div style={{ marginBottom: "1rem" }}>
-              <input
-                className="input"
-                placeholder="Search foods…"
-                value={foodSearch}
-                onChange={(e) => setFoodSearch(e.target.value)}
-              />
-            </div>
-            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Serving</th>
-                    <th>Calories</th>
-                    <th>Protein</th>
-                    <th>Carbs</th>
-                    <th>Fat</th>
-                    <th style={{ width: 52 }}>Del</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredFoods.map((f) => (
-                    <tr key={f.id}>
-                      <td style={{ fontWeight: 500 }}>{f.name}</td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>
-                        {servingLabel(f)}
-                      </td>
-                      <td>{f.calories_per_serving} kcal</td>
-                      <td style={{ color: "#f87171" }}>
-                        {f.protein_per_serving}g
-                      </td>
-                      <td style={{ color: "#facc15" }}>
-                        {f.carbs_per_serving}g
-                      </td>
-                      <td style={{ color: "var(--accent2)" }}>
-                        {f.fat_per_serving}g
-                      </td>
-                      {/* ── NEW: Delete button ── */}
-                      <td>
-                        <button
-                          onClick={() => deleteFoodItem(f.id, f.name)}
-                          style={{
-                            background: "rgba(248,113,113,0.15)",
-                            color: "var(--red)",
-                            border: "none",
-                            borderRadius: 6,
-                            padding: "4px 10px",
-                            cursor: "pointer",
-                            fontSize: 12,
-                            fontWeight: 600,
-                          }}
-                        >
-                          🗑
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+          </div>
         )}
       </main>
 
+      {/* Modals */}
       {showAddFood && (
         <AddFoodModal
           onClose={() => setShowAddFood(false)}
           onSave={handleAddFood}
         />
       )}
-
       {showCopyModal && (
         <CopyPlanModal
           type={showCopyModal}
@@ -3881,8 +3156,6 @@ export default function Coach() {
           }
         />
       )}
-
-      {/* ── NEW: Chat overlay ── */}
       {chatOpen && chatClientId && (
         <Chat
           clientId={chatClientId}
