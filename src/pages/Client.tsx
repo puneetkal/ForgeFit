@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
 import Chat from "./Chat";
+import AiIntake, { callAi } from "./AiIntake";
 import XPBadgeAnimated from "../components/XPBadgeAnimated";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ interface ClientData {
   weight_kg: number;
   connection_code: string;
   coach_id: string | null;
+  intake_completed?: boolean;
 }
 interface FoodRef {
   name: string;
@@ -1147,6 +1149,7 @@ export default function Client() {
   >({});
   const [coachName, setCoachName] = useState("Coach");
   const [chatOpen, setChatOpen] = useState(false);
+  const [showIntake, setShowIntake] = useState(false);
   const [weeklyPhotos, setWeeklyPhotos] = useState<WeeklyProgressPhoto[]>([]);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [weeklyNote, setWeeklyNote] = useState("");
@@ -1170,6 +1173,7 @@ export default function Client() {
       .eq("id", clientId)
       .single();
     setClient(c);
+    if (c && !c.intake_completed) setShowIntake(true);
     if (c) {
       await Promise.all([
         loadAllPlanDates(clientId),
@@ -1181,6 +1185,23 @@ export default function Client() {
       ]);
     }
     setLoading(false);
+    if (c?.intake_completed) ensureWeek(c.id);
+  }
+
+  // Ask the AI to create this week's plan if it doesn't exist yet
+  async function ensureWeek(cid: string) {
+    try {
+      const r = await callAi({ action: "ensure_week", today: todayStr() });
+      if (r?.generated) {
+        await Promise.all([
+          loadAllPlanDates(cid),
+          loadDayPlan(cid, todayStr()),
+          loadClientGoals(cid),
+        ]);
+      }
+    } catch (e) {
+      console.error("ensure_week failed", e);
+    }
   }
 
   async function loadCoachName(c: ClientData) {
@@ -2520,6 +2541,17 @@ export default function Client() {
           </button>
         ))}
       </nav>
+
+      {showIntake && (
+        <AiIntake
+          today={todayStr()}
+          onSkip={() => setShowIntake(false)}
+          onDone={() => {
+            setShowIntake(false);
+            init();
+          }}
+        />
+      )}
 
       {/* Chat */}
       {chatOpen && client?.coach_id && (
